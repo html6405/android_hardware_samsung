@@ -13,7 +13,11 @@ LOCAL_SHARED_LIBRARIES := \
     libcutils \
     libhardware_legacy
 
-LOCAL_CFLAGS += -DHAVE_PTHREADS
+LOCAL_CFLAGS := 
+
+ifeq ($(TARGET_BOARD_PLATFORM),exynos4)
+LOCAL_CFLAGS += -DRIL_CALL_AUIO_PATH_EXTRAVOLUME
+endif
 
 LOCAL_MODULE:= libsecril-client
 LOCAL_PRELINK_MODULE := false
