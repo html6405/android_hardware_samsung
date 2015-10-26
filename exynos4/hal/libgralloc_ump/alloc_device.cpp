@@ -59,7 +59,7 @@
 #include <sys/ioctl.h>
 
 #if HAVE_ANDROID_OS
-#include <pixelflinger/format.h>
+#include "format.h"
 #endif
 
 #include "videodev2.h"
