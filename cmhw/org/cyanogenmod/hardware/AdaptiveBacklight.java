@@ -22,6 +22,7 @@ import android.os.SystemProperties;
 import android.text.TextUtils;
 
 import java.io.File;
+import android.util.Log;
 
 /**
  * Adaptive backlight support (this refers to technologies like NVIDIA SmartDimmer,
@@ -30,7 +31,8 @@ import java.io.File;
 public class AdaptiveBacklight {
 
     private static String FILE_CABC = SystemProperties.get("ro.cm.hardware.cabc", "/sys/class/lcd/panel/power_reduce");
-
+    private static final String TAG = "cmhw.AdaptiveBacklight";
+    
     /**
      * Whether device supports an adaptive backlight technology.
      *
@@ -38,7 +40,16 @@ public class AdaptiveBacklight {
      */
     public static boolean isSupported() {
         File f = new File(FILE_CABC);
-        return f.exists();
+        if(f.exists())
+        {
+            Log.i(TAG,"Detected AdaptiveBacklight!");
+            return true;
+        }
+        else
+        {
+            Log.i(TAG,"AdaptiveBacklight not detected!");
+            return false;
+        }
     }
 
     /**
@@ -49,8 +60,10 @@ public class AdaptiveBacklight {
      */
     public static boolean isEnabled() {
         if (TextUtils.equals(FileUtils.readOneLine(FILE_CABC), "1")) {
+            Log.i(TAG,"AdaptiveBacklight is enabled");
             return true;
         } else {
+            Log.i(TAG,"AdaptiveBacklight is not enabled");
             return false;
         }
     }
@@ -64,8 +77,10 @@ public class AdaptiveBacklight {
      */
     public static boolean setEnabled(boolean status) {
         if (status == true) {
+            Log.i(TAG,"Enabling AdaptiveBacklight");
             return FileUtils.writeLine(FILE_CABC, "1");
         } else {
+            Log.i(TAG,"Disabling AdaptiveBacklight");
             return FileUtils.writeLine(FILE_CABC, "0");
         }
     }
