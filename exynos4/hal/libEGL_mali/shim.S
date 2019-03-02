@@ -89,9 +89,9 @@ eglDestroyContext:
 eglQueryContext:
     b shim_eglQueryContext
 
-.globl eglMakeCurrent
+/*.globl eglMakeCurrent
 eglMakeCurrent:
-    b shim_eglMakeCurrent
+    b shim_eglMakeCurrent*/
 
 .globl eglGetCurrentContext
 eglGetCurrentContext:
@@ -130,9 +130,9 @@ eglCreatePbufferFromClientBuffer:
 eglCreatePixmapSurface:
     b shim_eglCreatePixmapSurface
 
-.globl eglDestroySurface
+/*.globl eglDestroySurface
 eglDestroySurface:
-    b shim_eglDestroySurface
+    b shim_eglDestroySurface*/
 
 .globl eglQuerySurface
 eglQuerySurface:
