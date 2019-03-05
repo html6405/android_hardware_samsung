@@ -21,7 +21,8 @@
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 
-#ifdef SKIP_EGL_CONTEXT_DETACH
+#if defined(NEEDS_NATIVE_WINDOW_FORMAT_FIX) || \
+    defined(SKIP_EGL_CONTEXT_DETACH)
 static int debug_level = 0;
 #endif
 
@@ -50,14 +51,15 @@ EGLSurface eglCreateWindowSurface(  EGLDisplay dpy, EGLConfig config,
                                     NativeWindowType window,
                                     const EGLint *attrib_list) {
 #ifdef NEEDS_NATIVE_WINDOW_FORMAT_FIX
-     int format, err;
-     window->query(window, NATIVE_WINDOW_FORMAT, &format);
+     int curFormat, newFormat, err;
+     window->query(window, NATIVE_WINDOW_FORMAT, &curFormat);
 
-     if (format == (int)HAL_PIXEL_FORMAT_RGBA_8888) {
-         format = (int)HAL_PIXEL_FORMAT_BGRA_8888;
-         err = window->perform(window, NATIVE_WINDOW_SET_BUFFERS_FORMAT, format);
+     shim_eglGetConfigAttrib(dpy, config, EGL_NATIVE_VISUAL_ID, &newFormat);
+
+     if (curFormat != newFormat) {
+         err = window->perform(window, NATIVE_WINDOW_SET_BUFFERS_FORMAT, newFormat);
+         ALOGD_IF(debug_level > 0, "%s: curFormat=%d, newFormat=%d", __func__, curFormat, newFormat);
      }
-
 #endif
      return shim_eglCreateWindowSurface(dpy, config, window, attrib_list);
 }
