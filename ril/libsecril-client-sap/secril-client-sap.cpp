@@ -16,6 +16,8 @@
 
 #define LOG_TAG "SapClient"
 
+#pragma clang diagnostic ignored "-Wunused-variable"
+
 #include <binder/Parcel.h>
 #include <telephony/ril.h>
 #include <cutils/record_stream.h>
