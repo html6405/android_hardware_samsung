@@ -31,6 +31,10 @@ ifeq ($(TARGET_BOOTLOADER_BOARD_NAME),smdk4210)
     LOCAL_CFLAGS += -DSMDK4210
 endif
 
+ifeq ($(TARGET_BOOTLOADER_BOARD_NAME),smdk4x12)
+    LOCAL_CFLAGS += -DSMDK4x12
+endif
+
 LOCAL_SRC_FILES := hwcomposer.cpp \
                    hwcomposer_vsync.cpp \
                    window.cpp \

@@ -262,7 +262,7 @@ bool is_offscreen(struct hwc_context_t *ctx, hwc_layer_1_t &layer)
             layer.displayFrame.bottom < 0;
 }
 
-#ifdef SMDK4210
+#if defined(SMDK4210) || defined(SMDK4x12)
 bool is_overlay_supported(struct hwc_context_t *ctx, hwc_layer_1_t &layer, size_t i)
 {
    if(layer.flags & HWC_SKIP_LAYER  || !layer.handle) {
