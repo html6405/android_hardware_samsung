@@ -32,6 +32,7 @@ const std::map<int32_t, TouchscreenGesture::GestureInfo> TouchscreenGesture::kGe
     {2, {0x2f3, "Swipe left stylus"}},
     {3, {0x2f4, "Swipe right stylus"}},
     {4, {0x2f5, "Long press stylus"}},
+    {5, {0x2f5, "Short press stylus"}},
 };
 
 
