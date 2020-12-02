@@ -29,6 +29,8 @@
 
 #include "libddc.h"
 
+#pragma clang diagnostic ignored "-Wformat"
+
 #define DDC_DEBUG 0
 
 /**
@@ -47,6 +49,9 @@
 #define DEV_NAME    "/dev/i2c-7"
 #endif
 
+#ifdef DDC_CH_I2C_5
+#define DEV_NAME    "/dev/i2c-5"
+#endif
 /**
  * DDC file descriptor
  */
@@ -245,7 +250,7 @@ int EDDCRead(unsigned char segpointer, unsigned char segment, unsigned char addr
 int DDCWrite(unsigned char addr, unsigned char offset, unsigned int size, unsigned char* buffer)
 {
     unsigned char* temp;
-    int bytes;
+    unsigned int bytes;
     int retval = 0;
 
     // allocate temporary buffer

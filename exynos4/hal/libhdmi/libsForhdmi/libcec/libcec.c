@@ -22,7 +22,7 @@
 #include <unistd.h>
 #include <stdlib.h>
 #include <cutils/log.h>
-
+#pragma clang diagnostic ignored "-Wunused-function"
 /* drv. header */
 #include "cec.h"
 
@@ -112,7 +112,7 @@ int CECClose()
 int CECAllocLogicalAddress(int paddr, enum CECDeviceType devtype)
 {
     unsigned char laddr = CEC_LADDR_UNREGISTERED;
-    int i = 0;
+    unsigned int i = 0;
 
     if (fd == -1) {
         ALOGE("open device first!\n");
