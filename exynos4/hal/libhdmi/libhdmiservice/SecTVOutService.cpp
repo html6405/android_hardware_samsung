@@ -32,6 +32,8 @@
 #include "SecTVOutService.h"
 #include <linux/fb.h>
 
+#pragma clang diagnostic ignored "-Wunused-parameter"
+
 namespace android {
 #define DEFAULT_LCD_WIDTH               800
 #define DEFAULT_LCD_HEIGHT              480

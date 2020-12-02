@@ -25,6 +25,8 @@
 
 #include "MessageQueue.h"
 
+#pragma clang diagnostic ignored "-Wunused-parameter"
+
 namespace android {
 
 // ---------------------------------------------------------------------------

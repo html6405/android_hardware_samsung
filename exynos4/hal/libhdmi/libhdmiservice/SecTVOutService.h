@@ -114,8 +114,8 @@ namespace android {
             uint32_t    mSrcColorFormat;
             uint32_t    mSrcYAddr, mSrcCbAddr, mSrcCrAddr;
             uint32_t    mDstX, mDstY;
-            uint32_t    mHdmiMode;
             uint32_t    mHdmiLayer, mHwcLayer;
+            uint32_t    mHdmiMode;
 
             SecHdmiEventMsg(SecHdmi *SecHdmi, uint32_t srcWidth, uint32_t srcHeight, uint32_t srcColorFormat,
                     uint32_t srcYAddr, uint32_t srcCbAddr, uint32_t srcCrAddr,
