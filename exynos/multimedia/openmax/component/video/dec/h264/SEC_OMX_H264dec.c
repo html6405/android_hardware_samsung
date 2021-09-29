@@ -972,13 +972,16 @@ OMX_ERRORTYPE SEC_MFC_H264_Decode_Nonblock(OMX_COMPONENTTYPE *pOMXComponent, SEC
     FunctionIn();
     if (pSECInputPort->portDefinition.format.video.nFrameWidth > 1920 &&
         pSECInputPort->portDefinition.format.video.nFrameHeight > 1088) {
-        SEC_OSAL_Log(SEC_LOG_ERROR, "Unsupported video size: %d, %d.",
+        SEC_OSAL_Log(SEC_LOG_ERROR, "Unsupported video size: %d, %d, set to hd resolution (1920x1088)\n",
                     pSECInputPort->portDefinition.format.video.nFrameWidth,
                     pSECInputPort->portDefinition.format.video.nFrameHeight);
+
+        pSECInputPort->portDefinition.format.video.nFrameWidth=1920;
+        pSECInputPort->portDefinition.format.video.nFrameHeight=1088;
         /* Decoding unsupported video size causes mediaserver to crash. */
         /* Just don't decode frame to prevent other issues. */
         ret = OMX_ErrorNone;
-        goto EXIT;
+        //goto EXIT;
     }
 
     if (pH264Dec->hMFCH264Handle.bConfiguredMFC == OMX_FALSE) {
