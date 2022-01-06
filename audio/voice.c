@@ -38,6 +38,8 @@
 #include "audience.h"
 #endif
 
+#pragma clang diagnostic ignored "-Wswitch"
+
 static struct pcm_config pcm_config_voicecall = {
     .channels = 2,
     .rate = 8000,
