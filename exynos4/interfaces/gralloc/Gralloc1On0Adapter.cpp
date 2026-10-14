@@ -256,17 +256,18 @@ gralloc1_error_t Gralloc1On0Adapter::allocate(
         return GRALLOC1_ERROR_NO_RESOURCES;
     }
 
-    mModule->perform(mModule, GRALLOC1_ADAPTER_PERFORM_SET_USAGES,
-            handle,
-            static_cast<int>(descriptor->producerUsage),
-            static_cast<int>(descriptor->consumerUsage));
-
     uint64_t backingStore = 0;
-    mModule->perform(mModule, GRALLOC1_ADAPTER_PERFORM_GET_BACKING_STORE,
-            handle, &backingStore);
     int numFlexPlanes = 0;
-    mModule->perform(mModule, GRALLOC1_ADAPTER_PERFORM_GET_NUM_FLEX_PLANES,
-            handle, &numFlexPlanes);
+    if (mModule->perform(mModule,
+                GRALLOC1_ADAPTER_PERFORM_GET_BACKING_STORE,
+                handle, &backingStore) != 0 ||
+            mModule->perform(mModule,
+                GRALLOC1_ADAPTER_PERFORM_GET_NUM_FLEX_PLANES,
+                handle, &numFlexPlanes) != 0) {
+        ALOGE("gralloc0 failed to query allocated buffer metadata");
+        mDevice->free(mDevice, handle);
+        return GRALLOC1_ERROR_NO_RESOURCES;
+    }
 
     *outBufferHandle = handle;
     auto buffer = std::make_shared<Buffer>(handle, backingStore,
@@ -375,30 +376,36 @@ gralloc1_error_t Gralloc1On0Adapter::retain(buffer_handle_t bufferHandle)
     }
 
     uint64_t backingStore = 0;
-    mModule->perform(mModule, GRALLOC1_ADAPTER_PERFORM_GET_BACKING_STORE,
-            bufferHandle, &backingStore);
-
     int numFlexPlanes = 0;
-    mModule->perform(mModule, GRALLOC1_ADAPTER_PERFORM_GET_NUM_FLEX_PLANES,
-            bufferHandle, &numFlexPlanes);
-
     int stride = 0;
-    mModule->perform(mModule, GRALLOC1_ADAPTER_PERFORM_GET_STRIDE,
-            bufferHandle, &stride);
-
     int width = 0;
     int height = 0;
     int format = HAL_PIXEL_FORMAT_IMPLEMENTATION_DEFINED;
-    int producerUsage = 0;
-    int consumerUsage = 0;
-    mModule->perform(mModule, GRALLOC1_ADAPTER_PERFORM_GET_DIMENSIONS,
-            bufferHandle, &width, &height);
-    mModule->perform(mModule, GRALLOC1_ADAPTER_PERFORM_GET_FORMAT,
-            bufferHandle, &format);
-    mModule->perform(mModule, GRALLOC1_ADAPTER_PERFORM_GET_PRODUCER_USAGE,
-            bufferHandle, &producerUsage);
-    mModule->perform(mModule, GRALLOC1_ADAPTER_PERFORM_GET_CONSUMER_USAGE,
-            bufferHandle, &consumerUsage);
+    int legacyUsage = 0;
+    if (mModule->perform(mModule,
+                GRALLOC1_ADAPTER_PERFORM_GET_BACKING_STORE,
+                bufferHandle, &backingStore) != 0 ||
+            mModule->perform(mModule,
+                GRALLOC1_ADAPTER_PERFORM_GET_NUM_FLEX_PLANES,
+                bufferHandle, &numFlexPlanes) != 0 ||
+            mModule->perform(mModule, GRALLOC1_ADAPTER_PERFORM_GET_STRIDE,
+                bufferHandle, &stride) != 0 ||
+            mModule->perform(mModule,
+                GRALLOC1_ADAPTER_PERFORM_GET_DIMENSIONS,
+                bufferHandle, &width, &height) != 0 ||
+            mModule->perform(mModule, GRALLOC1_ADAPTER_PERFORM_GET_FORMAT,
+                bufferHandle, &format) != 0 ||
+            mModule->perform(mModule, GRALLOC1_ADAPTER_PERFORM_GET_USAGE,
+                bufferHandle, &legacyUsage) != 0) {
+        ALOGE("gralloc0 failed to query imported buffer metadata");
+        mModule->unregisterBuffer(mModule, bufferHandle);
+        return GRALLOC1_ERROR_BAD_HANDLE;
+    }
+
+    uint64_t producerUsage = 0;
+    uint64_t consumerUsage = 0;
+    android_convertGralloc0To1Usage(legacyUsage, &producerUsage,
+            &consumerUsage);
 
     Descriptor descriptor;
     descriptor.setDimensions(width, height);

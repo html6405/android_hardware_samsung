@@ -28,8 +28,10 @@
 #ifndef GRALLOC_PRIV_H_
 #define GRALLOC_PRIV_H_
 
-#include <unistd.h>
+#include "gralloc_usage.h"
+
 #include <stdint.h>
+#include <unistd.h>
 #include <pthread.h>
 #include <errno.h>
 #include <linux/fb.h>
@@ -106,7 +108,8 @@ struct private_handle_t {
         PRIV_FLAGS_USES_HDMI     = 0x00000010,
         PRIV_FLAGS_USES_ION      = 0x00000020,
         PRIV_FLAGS_NONE_CACHED   = 0x00000040,
-        PRIV_FLAGS_GRAPHICBUFFER = 0x00000080
+        PRIV_FLAGS_GRAPHICBUFFER = 0x00000080,
+        PRIV_FLAGS_CONTIGUOUS_ION = 0x00000100
     };
 
     enum {
@@ -143,13 +146,13 @@ struct private_handle_t {
     unsigned int uoffset;
     unsigned int voffset;
 
-    /* Following members are for ION memory only */
+    /*
+     * The native handle ABI ends at ion_client: one fd followed by 21 ints.
+     * ion_memory is process-local allocator state and must never be read from
+     * a handle received over Binder, where storage stops at ion_client.
+     */
     int     ion_client;
     void   *ion_memory;
-
-    uint64_t backing_store;
-    uint64_t producer_usage;
-    uint64_t consumer_usage;
 
 #ifdef __cplusplus
     static const int sNumInts = 21;
@@ -175,10 +178,11 @@ struct private_handle_t {
     height(0),
     bpp(0),
     stride(0),
-    ion_client(0),
     yaddr(0),
     uoffset(0),
-    voffset(0)
+    voffset(0),
+    ion_client(0),
+    ion_memory(NULL)
     {
         version = sizeof(native_handle);
         numFds = sNumFds;
@@ -206,10 +210,11 @@ struct private_handle_t {
     height(0),
     bpp(0),
     stride(0),
-    ion_client(0),
     yaddr(0),
     uoffset(0),
-    voffset(0)
+    voffset(0),
+    ion_client(0),
+    ion_memory(NULL)
     {
         version = sizeof(native_handle);
         numFds = sNumFds;
@@ -225,7 +230,10 @@ struct private_handle_t {
 
     bool usesPhysicallyContiguousMemory()
     {
-        return (flags & PRIV_FLAGS_FRAMEBUFFER) ? true : false;
+        return (flags & (PRIV_FLAGS_FRAMEBUFFER |
+                         PRIV_FLAGS_USES_IOCTL |
+                         PRIV_FLAGS_USES_HDMI |
+                         PRIV_FLAGS_CONTIGUOUS_ION)) != 0;
     }
 
     static int validate(const native_handle* h)

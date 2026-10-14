@@ -30,12 +30,6 @@ enum {
     GRALLOC1_ADAPTER_PERFORM_GET_REAL_MODULE_API_VERSION_MINOR =
         GRALLOC1_ADAPTER_PERFORM_FIRST,
 
-    // void setUsages(..., buffer_handle_t buffer,
-    //                     int producerUsage,
-    //                     int consumerUsage);
-    GRALLOC1_ADAPTER_PERFORM_SET_USAGES =
-        GRALLOC1_ADAPTER_PERFORM_FIRST + 1,
-
     // void getDimensions(..., buffer_handle_t buffer,
     //                         int* outWidth,
     //                         int* outHeight);
@@ -46,13 +40,10 @@ enum {
     GRALLOC1_ADAPTER_PERFORM_GET_FORMAT =
         GRALLOC1_ADAPTER_PERFORM_FIRST + 3,
 
-    // void getProducerUsage(..., buffer_handle_t buffer, int* outUsage);
-    GRALLOC1_ADAPTER_PERFORM_GET_PRODUCER_USAGE =
+    // void getUsage(..., buffer_handle_t buffer, int* outUsage);
+    // Returns the gralloc0 usage stored in the legacy 21-word handle.
+    GRALLOC1_ADAPTER_PERFORM_GET_USAGE =
         GRALLOC1_ADAPTER_PERFORM_FIRST + 4,
-
-    // void getConsumerUsage(..., buffer_handle_t buffer, int* outUsage);
-    GRALLOC1_ADAPTER_PERFORM_GET_CONSUMER_USAGE =
-        GRALLOC1_ADAPTER_PERFORM_FIRST + 5,
 
     // void getBackingStore(..., buffer_handle_t buffer,
     //                           uint64_t* outBackingStore);
