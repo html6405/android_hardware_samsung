@@ -79,6 +79,12 @@ void csc_interleave_memcpy(
     unsigned char *src2,
     unsigned int src_size);
 */
+
+void csc_interleave_memcpy_neon(
+    unsigned char *dest,
+    unsigned char *src1,
+    unsigned char *src2,
+    unsigned int src_size);
 /* C Code */
 /*
  * Converts tiled data to linear
@@ -419,6 +425,13 @@ void csc_ARGB8888_to_YUV420SP_NEON(
     unsigned int height);
 
 void csc_ABGR8888_to_YUV420SP(
+    unsigned char *y_dst,
+    unsigned char *uv_dst,
+    unsigned char *rgb_src,
+    unsigned int width,
+    unsigned int height);
+
+void csc_ABGR8888_to_YUV420SP_NEON(
     unsigned char *y_dst,
     unsigned char *uv_dst,
     unsigned char *rgb_src,

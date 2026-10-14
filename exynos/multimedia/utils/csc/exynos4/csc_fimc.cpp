@@ -118,12 +118,13 @@ CSC_FIMC_ERROR_CODE csc_fimc_convert_nv12t(
         goto EXIT;
     }
 
-    hw_converter->convert(
-            (void *)src_addr, (void *)dst_addr,
-            (OMX_COLOR_FORMATTYPE)OMX_SEC_COLOR_FormatNV12TPhysicalAddress,
-            width, height, omxformat);
-
-    ret = CSC_FIMC_RET_OK;
+    if (!hw_converter->convert(
+                (void *)src_addr, (void *)dst_addr,
+                (OMX_COLOR_FORMATTYPE)OMX_SEC_COLOR_FormatNV12TPhysicalAddress,
+                width, height, omxformat)) {
+        ALOGE("%s: FIMC conversion failed", __func__);
+        ret = CSC_FIMC_RET_FAIL;
+    }
 
 EXIT:
 
