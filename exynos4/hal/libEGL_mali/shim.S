@@ -19,10 +19,6 @@
 eglGetConfigs:
     b shim_eglGetConfigs
 
-.globl eglChooseConfig
-eglChooseConfig:
-    b shim_eglChooseConfig
-
 /*
 .globl eglGetConfigAttrib
 eglGetConfigAttrib:
@@ -32,10 +28,6 @@ eglGetConfigAttrib:
 .globl eglGetError
 eglGetError:
     b shim_eglGetError
-
-.globl eglQueryString
-eglQueryString:
-    b shim_eglQueryString
 
 .globl eglWaitClient
 eglWaitClient:
@@ -76,10 +68,6 @@ eglBindAPI:
 .globl eglQueryAPI
 eglQueryAPI:
     b shim_eglQueryAPI
-
-.globl eglCreateContext
-eglCreateContext:
-    b shim_eglCreateContext
 
 .globl eglDestroyContext
 eglDestroyContext:
