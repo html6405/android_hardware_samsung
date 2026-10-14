@@ -92,7 +92,7 @@ static int jpeg_v4l2_s_jpegcomp(int fd, int quality)
 
 static int jpeg_v4l2_s_fmt(int fd, enum v4l2_buf_type type, struct jpeg_config *config)
 {
-    struct v4l2_format fmt;
+    struct v4l2_format fmt = {};
     int ret = 0;
 
     fmt.type = type;
@@ -137,7 +137,7 @@ static int jpeg_v4l2_s_fmt(int fd, enum v4l2_buf_type type, struct jpeg_config *
 
 static int jpeg_v4l2_g_fmt(int fd, enum v4l2_buf_type type, struct jpeg_config *config)
 {
-    struct v4l2_format fmt;
+    struct v4l2_format fmt = {};
     int ret = 0;
 
     fmt.type = type;
@@ -208,7 +208,7 @@ static int jpeg_v4l2_reqbufs(int fd, int buf_cnt, struct jpeg_buf *buf)
 
 static int jpeg_v4l2_querybuf(int fd, struct jpeg_buf *buf)
 {
-    struct v4l2_buffer v4l2_buf;
+    struct v4l2_buffer v4l2_buf = {};
     struct v4l2_plane plane[JPEG_MAX_PLANE_CNT];
     int i;
     int ret = 0;
@@ -278,12 +278,16 @@ static int jpeg_v4l2_qbuf(int fd, struct jpeg_buf *buf)
 static int jpeg_v4l2_dqbuf(int fd, enum v4l2_buf_type type, enum v4l2_memory memory)
 {
     struct v4l2_buffer buf;
+    struct v4l2_plane planes[JPEG_MAX_PLANE_CNT];
     int ret = 0;
 
     memset(&buf, 0, sizeof(struct v4l2_buffer));
+    memset(planes, 0, sizeof(planes));
 
     buf.type = type;
     buf.memory = memory;
+    buf.length = JPEG_MAX_PLANE_CNT;
+    buf.m.planes = planes;
 
     ret = ioctl(fd, VIDIOC_DQBUF, &buf);
     if (ret < 0) {
@@ -335,6 +339,7 @@ int jpeghal_dec_init()
     ret = jpeg_v4l2_querycap(fd);
     if (ret < 0) {
         ALOGE("[%s]: QUERYCAP failed", __func__);
+        close(fd);
         return -1;
     }
 
@@ -355,6 +360,7 @@ int jpeghal_enc_init()
     ret = jpeg_v4l2_querycap(fd);
     if (ret < 0) {
         ALOGE("[%s]: QUERYCAP failed", __func__);
+        close(fd);
         return -1;
     }
 
@@ -435,7 +441,7 @@ int jpeghal_set_inbuf(int fd, struct jpeg_buf *buf)
 
     ret = jpeg_v4l2_reqbufs(fd, 1, buf);
     if (ret < 0) {
-        ALOGE("[%s:%d]: Input REQBUFS failed", __func__, ret);
+        ALOGE("[%s]: Input REQBUFS failed: %s", __func__, strerror(errno));
         return -1;
     }
 
@@ -458,7 +464,7 @@ int jpeghal_set_outbuf(int fd, struct jpeg_buf *buf)
 
     ret = jpeg_v4l2_reqbufs(fd, 1, buf);
     if (ret < 0) {
-        ALOGE("[%s:%d]: Output REQBUFS failed", __func__, ret);
+        ALOGE("[%s]: Output REQBUFS failed: %s", __func__, strerror(errno));
         return -1;
     }
 
@@ -475,27 +481,34 @@ int jpeghal_set_outbuf(int fd, struct jpeg_buf *buf)
 
 static int jpeg_exe(int fd, struct jpeg_buf *in_buf, struct jpeg_buf *out_buf)
 {
-    int ret = 0;
-
-    ret = jpeg_v4l2_qbuf(fd, in_buf);
-    if (ret < 0) {
-        ALOGE("[%s:%d]: Input QBUF failed", __func__, ret);
+    if (jpeg_v4l2_qbuf(fd, in_buf) < 0) {
+        ALOGE("[%s]: Input QBUF failed", __func__);
         return -1;
     }
-
-    ret = jpeg_v4l2_qbuf(fd, out_buf);
-    if (ret < 0) {
-        ALOGE("[%s:%d]: Output QBUF failed", __func__, ret);
+    if (jpeg_v4l2_qbuf(fd, out_buf) < 0) {
+        ALOGE("[%s]: Output QBUF failed", __func__);
         return -1;
     }
+    if (jpeg_v4l2_streamon(fd, in_buf->buf_type) < 0 ||
+        jpeg_v4l2_streamon(fd, out_buf->buf_type) < 0)
+        return -1;
 
-    ret = jpeg_v4l2_streamon(fd, in_buf->buf_type);
-    ret = jpeg_v4l2_streamon(fd, out_buf->buf_type);
-
-    ret = jpeg_v4l2_dqbuf(fd, in_buf->buf_type, in_buf->memory);
-    ret = jpeg_v4l2_dqbuf(fd, out_buf->buf_type, out_buf->memory);
-
-    return ret;
+    struct pollfd ready = {};
+    ready.fd = fd;
+    ready.events = POLLIN | POLLERR;
+    int pollResult;
+    do {
+        pollResult = poll(&ready, 1, 3000);
+    } while (pollResult < 0 && errno == EINTR);
+    if (pollResult <= 0 || (ready.revents & POLLERR) || !(ready.revents & POLLIN)) {
+        ALOGE("[%s]: JPEG completion failed or timed out: %s", __func__,
+              pollResult < 0 ? strerror(errno) : "no completed output buffer");
+        return -1;
+    }
+    if (jpeg_v4l2_dqbuf(fd, out_buf->buf_type, out_buf->memory) < 0 ||
+        jpeg_v4l2_dqbuf(fd, in_buf->buf_type, in_buf->memory) < 0)
+        return -1;
+    return 0;
 }
 
 int jpeghal_dec_exe(int fd, struct jpeg_buf *in_buf, struct jpeg_buf *out_buf)
