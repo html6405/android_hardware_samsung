@@ -21,7 +21,7 @@ endif
 ifeq ($(BOARD_USE_ANB), true)
 LOCAL_CFLAGS += -DUSE_ANB
 ifeq ($(BOARD_USE_CSC_FIMC), true)
-ifeq ($(BOARD_USE_V4L2_ION), false)
+ifneq ($(BOARD_USE_V4L2_ION), true)
 LOCAL_CFLAGS += -DUSE_CSC_FIMC
 endif
 endif

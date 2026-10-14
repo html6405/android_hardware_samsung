@@ -62,6 +62,7 @@ typedef struct _SEC_H264DEC_HANDLE
     /* CSC FIMC handle */
 #ifdef USE_CSC_FIMC
     OMX_PTR hFIMCHandle;
+    OMX_U64 nextFimcRetryNs;
 #endif
 } SEC_H264DEC_HANDLE;
 

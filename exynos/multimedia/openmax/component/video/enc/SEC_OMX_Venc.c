@@ -28,6 +28,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <hardware/gralloc.h>
+#include <OMX_Core.h>
+#include <media/openmax/OMX_IndexExt.h>
 #include "SEC_OMX_Macros.h"
 #include "SEC_OSAL_Event.h"
 #include "SEC_OMX_Venc.h"
@@ -714,6 +717,11 @@ OMX_BOOL SEC_Preprocessor_InputData(OMX_COMPONENTTYPE *pOMXComponent)
             case OMX_SEC_COLOR_FormatNV12LVirtualAddress:
                 oneFrameSize = ALIGN((ALIGN(width, 16) * ALIGN(height, 16)), 2048) + ALIGN((ALIGN(width, 16) * ALIGN(height >> 1, 8)), 2048);
                 break;
+#ifdef USE_METADATABUFFERTYPE
+            case OMX_COLOR_FormatAndroidOpaque:
+                oneFrameSize = checkInputStreamLen;
+                break;
+#endif
             default:
                 SEC_OSAL_Log(SEC_LOG_ERROR, "SEC_Preprocessor_InputData: eColorFormat is wrong");
                 break;
@@ -801,16 +809,82 @@ OMX_BOOL SEC_Preprocessor_InputData(OMX_COMPONENTTYPE *pOMXComponent)
 #ifdef USE_METADATABUFFERTYPE
                     else {
                         if (pSECPort->portDefinition.format.video.eColorFormat == OMX_COLOR_FormatAndroidOpaque) {
+                            OMX_PTR ppBuf[3] = { NULL, NULL, NULL };
+                            OMX_PTR pOutBuffer = NULL;
+                            OMX_U8 *dstY = (OMX_U8 *)pVideoEnc->MFCEncInputBuffer[pVideoEnc->indexInputBuffer].YVirAddr;
+                            OMX_U8 *dstUV = (OMX_U8 *)pVideoEnc->MFCEncInputBuffer[pVideoEnc->indexInputBuffer].CVirAddr;
+                            OMX_U8 *srcY;
+                            OMX_U8 *srcChroma;
+                            OMX_U32 stride = 0;
+                            OMX_U32 chromaOffset = 0;
+                            OMX_U32 row;
+                            OMX_U32 column;
+                            SEC_OSAL_ANB_FORMATTYPE anbFormat = SEC_OSAL_ANB_FORMAT_UNKNOWN;
+                            OMX_ERRORTYPE metadataRet;
+                            OMX_ERRORTYPE infoRet;
+                            OMX_ERRORTYPE lockRet;
 
-                            OMX_PTR ppBuf[3];
-                            OMX_PTR pOutBuffer;
+                            metadataRet = SEC_OSAL_GetInfoFromMetaData(inputData, ppBuf);
+                            if (metadataRet != OMX_ErrorNone || ppBuf[0] == NULL) {
+                                SEC_OSAL_Log(SEC_LOG_ERROR,
+                                             "Failed to obtain opaque input metadata");
+                                SEC_DataReset(pOMXComponent, INPUT_PORT_INDEX);
+                                return OMX_FALSE;
+                            }
 
-                            SEC_OSAL_GetInfoFromMetaData(inputData, ppBuf);
-                            SEC_OSAL_LockANBHandle((OMX_U32)ppBuf[0], width, height, OMX_COLOR_FormatAndroidOpaque, &pOutBuffer);
+                            infoRet = SEC_OSAL_GetANBInfoHandle((OMX_U32)ppBuf[0],
+                                                               &anbFormat,
+                                                               &stride,
+                                                               &chromaOffset);
+                            if (infoRet != OMX_ErrorNone || stride < width) {
+                                SEC_OSAL_Log(SEC_LOG_ERROR,
+                                             "Unsupported opaque input layout");
+                                SEC_DataReset(pOMXComponent, INPUT_PORT_INDEX);
+                                return OMX_FALSE;
+                            }
 
-                            csc_ABGR8888_to_YUV420SP_NEON(pVideoEnc->MFCEncInputBuffer[pVideoEnc->indexInputBuffer].YVirAddr,
-                                                    pVideoEnc->MFCEncInputBuffer[pVideoEnc->indexInputBuffer].CVirAddr,
-                                                    pOutBuffer, width, height);
+                            lockRet = SEC_OSAL_LockANBHandle((OMX_U32)ppBuf[0],
+                                                            width, height,
+                                                            OMX_COLOR_FormatAndroidOpaque,
+                                                            &pOutBuffer);
+                            if (lockRet != OMX_ErrorNone || pOutBuffer == NULL) {
+                                SEC_OSAL_Log(SEC_LOG_ERROR,
+                                             "Failed to lock opaque input buffer");
+                                SEC_DataReset(pOMXComponent, INPUT_PORT_INDEX);
+                                return OMX_FALSE;
+                            }
+
+                            srcY = (OMX_U8 *)pOutBuffer;
+                            if (anbFormat == SEC_OSAL_ANB_FORMAT_ABGR8888) {
+                                csc_ABGR8888_to_YUV420SP_NEON(dstY, dstUV,
+                                                              srcY, width, height);
+                            } else {
+                                if (chromaOffset < stride * height) {
+                                    SEC_OSAL_Log(SEC_LOG_ERROR,
+                                                 "Invalid opaque YUV chroma offset");
+                                    SEC_OSAL_UnlockANBHandle((OMX_U32)ppBuf[0]);
+                                    SEC_DataReset(pOMXComponent, INPUT_PORT_INDEX);
+                                    return OMX_FALSE;
+                                }
+                                srcChroma = srcY + chromaOffset;
+                                for (row = 0; row < height; row++) {
+                                    SEC_OSAL_Memcpy(dstY + row * width,
+                                                    srcY + row * stride, width);
+                                }
+                                for (row = 0; row < height / 2; row++) {
+                                    OMX_U8 *srcRow = srcChroma + row * stride;
+                                    OMX_U8 *dstRow = dstUV + row * width;
+                                    if (anbFormat == SEC_OSAL_ANB_FORMAT_NV12) {
+                                        SEC_OSAL_Memcpy(dstRow, srcRow, width);
+                                    } else {
+                                        for (column = 0; column + 1 < width;
+                                             column += 2) {
+                                            dstRow[column] = srcRow[column + 1];
+                                            dstRow[column + 1] = srcRow[column];
+                                        }
+                                    }
+                                }
+                            }
 
                             SEC_OSAL_UnlockANBHandle((OMX_U32)ppBuf[0]);
                         }
@@ -1079,6 +1153,15 @@ OMX_ERRORTYPE SEC_OMX_VideoEncodeGetParameter(
     }
 
     switch (nParamIndex) {
+    case OMX_IndexParamConsumerUsageBits:
+    {
+        // AndroidOpaque input arrives through GraphicBufferSource.  This
+        // encoder reads pixels on the CPU before converting them for MFC;
+        // advertise that access before BufferQueue allocates its buffers.
+        *(OMX_U32 *)ComponentParameterStructure = GRALLOC_USAGE_SW_READ_OFTEN;
+        ret = OMX_ErrorNone;
+    }
+        break;
     case OMX_IndexParamVideoInit:
     {
         OMX_PORT_PARAM_TYPE *portParam = (OMX_PORT_PARAM_TYPE *)ComponentParameterStructure;

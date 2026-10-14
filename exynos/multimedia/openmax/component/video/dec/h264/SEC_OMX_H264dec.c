@@ -27,6 +27,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "SEC_OMX_Macros.h"
 #include "SEC_OMX_Basecomponent.h"
@@ -64,6 +65,78 @@
 //#define ADD_SPS_PPS_I_FRAME
 #endif
 //#define FULL_FRAME_SEARCH
+
+#ifdef USE_ANB
+static OMX_ERRORTYPE SEC_H264_LockANBForCPU(
+    SEC_OMX_DATA *pOutputData,
+    SEC_OMX_BASEPORT *pOutputPort,
+    OMX_S32 *width,
+    OMX_S32 height,
+    void **pYUVBuf,
+    OMX_BOOL *locked)
+{
+    OMX_U32 stride;
+    OMX_ERRORTYPE ret;
+
+    if (*locked == OMX_TRUE)
+        return OMX_ErrorNone;
+
+    ret = SEC_OSAL_LockANB(pOutputData->dataBuffer, *width, height,
+                           pOutputPort->portDefinition.format.video.eColorFormat,
+                           &stride, pYUVBuf);
+    if (ret != OMX_ErrorNone)
+        return ret;
+
+    *width = stride;
+    *locked = OMX_TRUE;
+    return OMX_ErrorNone;
+}
+#endif
+
+#ifdef USE_CSC_FIMC
+static void SEC_H264_EnsureFimc(SEC_H264DEC_HANDLE *pH264Dec)
+{
+    struct timespec now;
+    OMX_U64 nowNs;
+
+    if (pH264Dec->hFIMCHandle != NULL || clock_gettime(CLOCK_MONOTONIC, &now) != 0)
+        return;
+    nowNs = (OMX_U64)now.tv_sec * 1000000000ULL + (OMX_U64)now.tv_nsec;
+    if (nowNs < pH264Dec->nextFimcRetryNs)
+        return;
+
+    // Another decoder may temporarily own the exclusive FIMC0 node while
+    // YouTube switches surfaces.  Keep the CPU CSC path available, then
+    // reacquire hardware conversion once that decoder releases the node.
+    pH264Dec->nextFimcRetryNs = nowNs + 2000000000ULL;
+    pH264Dec->hFIMCHandle = csc_fimc_open();
+}
+
+static OMX_BOOL SEC_H264_ConvertToANBWithFIMC(
+    SEC_H264DEC_HANDLE *pH264Dec,
+    SEC_OMX_DATA *pOutputData,
+    SSBSIP_MFC_DEC_OUTPUT_INFO *pOutputInfo,
+    OMX_U32 width,
+    OMX_U32 height,
+    OMX_COLOR_FORMATTYPE format)
+{
+    void *dstPhys[3] = { NULL, NULL, NULL };
+    void *srcPhys[3] = {
+        pOutputInfo->YPhyAddr,
+        pOutputInfo->CPhyAddr,
+        NULL
+    };
+
+    if (SEC_OSAL_GetPhysANB(pOutputData->dataBuffer, dstPhys) != OMX_ErrorNone)
+        return OMX_FALSE;
+
+    if (csc_fimc_convert_nv12t(pH264Dec->hFIMCHandle, dstPhys, srcPhys,
+                               width, height, format) != CSC_FIMC_RET_OK)
+        return OMX_FALSE;
+
+    return OMX_TRUE;
+}
+#endif
 
 /* H.264 Decoder Supported Levels & profiles */
 SEC_OMX_VIDEO_PROFILELEVEL supportedAVCProfileLevels[] ={
@@ -884,7 +957,9 @@ OMX_ERRORTYPE SEC_MFC_H264Dec_Init(OMX_COMPONENTTYPE *pOMXComponent)
     pSECComponent->getAllDelayBuffer = OMX_FALSE;
 
 #ifdef USE_CSC_FIMC
-    pH264Dec->hFIMCHandle = csc_fimc_open();
+    pH264Dec->hFIMCHandle = NULL;
+    pH264Dec->nextFimcRetryNs = 0;
+    SEC_H264_EnsureFimc(pH264Dec);
 #endif
 
 EXIT:
@@ -1002,8 +1077,12 @@ OMX_ERRORTYPE SEC_MFC_H264_Decode_Nonblock(OMX_COMPONENTTYPE *pOMXComponent, SEC
             setConfVal = H264_DEC_NUM_OF_EXTRA_BUFFERS;
             SsbSipMfcDecSetConfig(pH264Dec->hMFCH264Handle.hMFCHandle, MFC_DEC_SETCONF_EXTRA_BUFFER_NUM, &setConfVal);
 
-            setConfVal = 8;
-            SsbSipMfcDecSetConfig(pH264Dec->hMFCH264Handle.hMFCHandle, MFC_DEC_SETCONF_DISPLAY_DELAY, &setConfVal);
+            /*
+             * Do not force an eight-frame display queue.  The MFC driver
+             * derives the required H.264 reorder depth from the stream; a
+             * fixed queue adds 133 ms at 60 fps (267 ms at 30 fps) and can
+             * exhaust the native-window queue while output conversion runs.
+             */
         }
 
         SsbSipMfcDecSetInBuf(pH264Dec->hMFCH264Handle.hMFCHandle,
@@ -1375,6 +1454,8 @@ OMX_ERRORTYPE SEC_MFC_H264_Decode_Nonblock(OMX_COMPONENTTYPE *pOMXComponent, SEC
     if (outputDataValid == OMX_TRUE) {
         void *pOutputBuf = (void *)pOutputData->dataBuffer;
         void *pYUVBuf[3];
+        OMX_BOOL anbLocked = OMX_FALSE;
+        OMX_BOOL useFIMC = OMX_FALSE;
 
         int frameSize = bufWidth * bufHeight;
         int actualWidth = outputInfo.img_width;
@@ -1388,9 +1469,27 @@ OMX_ERRORTYPE SEC_MFC_H264_Decode_Nonblock(OMX_COMPONENTTYPE *pOMXComponent, SEC
 
 #ifdef USE_ANB
         if (pSECOutputPort->bIsANBEnabled == OMX_TRUE) {
-            OMX_U32 stride;
-            SEC_OSAL_LockANB(pOutputData->dataBuffer, actualWidth, actualHeight, pSECComponent->pSECPort[OUTPUT_PORT_INDEX].portDefinition.format.video.eColorFormat, &stride, pYUVBuf);
-            actualWidth = stride;
+#ifdef USE_CSC_FIMC
+            SEC_H264_EnsureFimc(pH264Dec);
+            useFIMC = (pH264Dec->hFIMCHandle != NULL) &&
+                ((pSECOutputPort->portDefinition.format.video.eColorFormat ==
+                        OMX_COLOR_FormatYUV420SemiPlanar) ||
+                 (pSECOutputPort->portDefinition.format.video.eColorFormat ==
+                        OMX_SEC_COLOR_FormatANBYUV420SemiPlanar) ||
+                 (pSECOutputPort->portDefinition.format.video.eColorFormat ==
+                        OMX_COLOR_FormatYUV420Planar) ||
+                 (pSECOutputPort->portDefinition.format.video.eColorFormat ==
+                        OMX_COLOR_FormatYCbCr420Planar));
+#endif
+            if (useFIMC == OMX_FALSE) {
+                ret = SEC_H264_LockANBForCPU(pOutputData, pSECOutputPort,
+                                             &actualWidth, actualHeight,
+                                             pYUVBuf, &anbLocked);
+                if (ret != OMX_ErrorNone) {
+                    pOutputData->dataLen = 0;
+                    goto EXIT;
+                }
+            }
             pOutputData->dataLen = sizeof(void *);
         }
 #endif
@@ -1425,15 +1524,20 @@ OMX_ERRORTYPE SEC_MFC_H264_Decode_Nonblock(OMX_COMPONENTTYPE *pOMXComponent, SEC
 #endif
             case OMX_SEC_COLOR_FormatANBYUV420SemiPlanar:
 #ifdef USE_CSC_FIMC
-                if ((pSECOutputPort->bIsANBEnabled == OMX_TRUE) && (pH264Dec->hFIMCHandle != NULL)) {
-                    void *pPhys[3];
-                    SEC_OSAL_GetPhysANB(pOutputData->dataBuffer, pPhys);
-                    pYUVBuf[0] = outputInfo.YPhyAddr;
-                    pYUVBuf[1] = outputInfo.CPhyAddr;
-                    csc_fimc_convert_nv12t(pH264Dec->hFIMCHandle, pPhys,
-                                        pYUVBuf, actualWidth, actualHeight,
-                                        OMX_COLOR_FormatYUV420SemiPlanar);
-                    break;
+                if ((pSECOutputPort->bIsANBEnabled == OMX_TRUE) &&
+                    (useFIMC == OMX_TRUE)) {
+                    if (SEC_H264_ConvertToANBWithFIMC(
+                                pH264Dec, pOutputData, &outputInfo,
+                                actualWidth, actualHeight,
+                                OMX_COLOR_FormatYUV420SemiPlanar) == OMX_TRUE)
+                        break;
+                    SEC_OSAL_Log(SEC_LOG_WARNING,
+                                 "FIMC CSC failed; falling back to NEON");
+                    ret = SEC_H264_LockANBForCPU(pOutputData, pSECOutputPort,
+                                                 &actualWidth, actualHeight,
+                                                 pYUVBuf, &anbLocked);
+                    if (ret != OMX_ErrorNone)
+                        goto EXIT;
                 }
 #endif
                 csc_tiled_to_linear_y_neon(
@@ -1457,15 +1561,20 @@ OMX_ERRORTYPE SEC_MFC_H264_Decode_Nonblock(OMX_COMPONENTTYPE *pOMXComponent, SEC
 #endif
             default:
 #ifdef USE_CSC_FIMC
-                if ((pSECOutputPort->bIsANBEnabled == OMX_TRUE) && (pH264Dec->hFIMCHandle != NULL)) {
-                    void *pPhys[3];
-                    SEC_OSAL_GetPhysANB(pOutputData->dataBuffer, pPhys);
-                    pYUVBuf[0] = outputInfo.YPhyAddr;
-                    pYUVBuf[1] = outputInfo.CPhyAddr;
-                    csc_fimc_convert_nv12t(pH264Dec->hFIMCHandle, pPhys,
-                                        pYUVBuf, actualWidth, actualHeight,
-                                        OMX_COLOR_FormatYUV420Planar);
-                    break;
+                if ((pSECOutputPort->bIsANBEnabled == OMX_TRUE) &&
+                    (useFIMC == OMX_TRUE)) {
+                    if (SEC_H264_ConvertToANBWithFIMC(
+                                pH264Dec, pOutputData, &outputInfo,
+                                actualWidth, actualHeight,
+                                OMX_COLOR_FormatYUV420Planar) == OMX_TRUE)
+                        break;
+                    SEC_OSAL_Log(SEC_LOG_WARNING,
+                                 "FIMC CSC failed; falling back to NEON");
+                    ret = SEC_H264_LockANBForCPU(pOutputData, pSECOutputPort,
+                                                 &actualWidth, actualHeight,
+                                                 pYUVBuf, &anbLocked);
+                    if (ret != OMX_ErrorNone)
+                        goto EXIT;
                 }
 #endif
                 csc_tiled_to_linear_y_neon(
@@ -1483,7 +1592,7 @@ OMX_ERRORTYPE SEC_MFC_H264_Decode_Nonblock(OMX_COMPONENTTYPE *pOMXComponent, SEC
             }
         }
 #ifdef USE_ANB
-        if (pSECOutputPort->bIsANBEnabled == OMX_TRUE) {
+        if (anbLocked == OMX_TRUE) {
             SEC_OSAL_UnlockANB(pOutputData->dataBuffer);
         }
 #endif
@@ -1534,8 +1643,7 @@ OMX_ERRORTYPE SEC_MFC_H264_Decode_Block(OMX_COMPONENTTYPE *pOMXComponent, SEC_OM
             setConfVal = H264_DEC_NUM_OF_EXTRA_BUFFERS;
             SsbSipMfcDecSetConfig(pH264Dec->hMFCH264Handle.hMFCHandle, MFC_DEC_SETCONF_EXTRA_BUFFER_NUM, &setConfVal);
 
-            setConfVal = 8;
-            SsbSipMfcDecSetConfig(pH264Dec->hMFCH264Handle.hMFCHandle, MFC_DEC_SETCONF_DISPLAY_DELAY, &setConfVal);
+            /* Let MFC select the display delay from the stream's DPB. */
         }
 
         returnCodec = SsbSipMfcDecInit(pH264Dec->hMFCH264Handle.hMFCHandle, eCodecType, oneFrameSize);
@@ -1684,6 +1792,8 @@ OMX_ERRORTYPE SEC_MFC_H264_Decode_Block(OMX_COMPONENTTYPE *pOMXComponent, SEC_OM
             /** Fill Output Buffer **/
             void *pOutputBuf = (void *)pOutputData->dataBuffer;
             void *pYUVBuf[3];
+            OMX_BOOL anbLocked = OMX_FALSE;
+            OMX_BOOL useFIMC = OMX_FALSE;
 
             int frameSize = bufWidth * bufHeight;
             int actualWidth = outputInfo.img_width;
@@ -1697,9 +1807,27 @@ OMX_ERRORTYPE SEC_MFC_H264_Decode_Block(OMX_COMPONENTTYPE *pOMXComponent, SEC_OM
 
 #ifdef USE_ANB
             if (pSECOutputPort->bIsANBEnabled == OMX_TRUE) {
-                OMX_U32 stride;
-                SEC_OSAL_LockANB(pOutputData->dataBuffer, actualWidth, actualHeight, pSECComponent->pSECPort[OUTPUT_PORT_INDEX].portDefinition.format.video.eColorFormat, &stride, pYUVBuf);
-                actualWidth = stride;
+#ifdef USE_CSC_FIMC
+                SEC_H264_EnsureFimc(pH264Dec);
+                useFIMC = (pH264Dec->hFIMCHandle != NULL) &&
+                    ((pSECOutputPort->portDefinition.format.video.eColorFormat ==
+                            OMX_COLOR_FormatYUV420SemiPlanar) ||
+                     (pSECOutputPort->portDefinition.format.video.eColorFormat ==
+                            OMX_SEC_COLOR_FormatANBYUV420SemiPlanar) ||
+                     (pSECOutputPort->portDefinition.format.video.eColorFormat ==
+                            OMX_COLOR_FormatYUV420Planar) ||
+                     (pSECOutputPort->portDefinition.format.video.eColorFormat ==
+                            OMX_COLOR_FormatYCbCr420Planar));
+#endif
+                if (useFIMC == OMX_FALSE) {
+                    ret = SEC_H264_LockANBForCPU(pOutputData, pSECOutputPort,
+                                                 &actualWidth, actualHeight,
+                                                 pYUVBuf, &anbLocked);
+                    if (ret != OMX_ErrorNone) {
+                        pOutputData->dataLen = 0;
+                        goto EXIT;
+                    }
+                }
                 pOutputData->dataLen = sizeof(void *);
             }
 #endif
@@ -1722,15 +1850,20 @@ OMX_ERRORTYPE SEC_MFC_H264_Decode_Block(OMX_COMPONENTTYPE *pOMXComponent, SEC_OM
                 case OMX_COLOR_FormatYUV420SemiPlanar:
                 case OMX_SEC_COLOR_FormatANBYUV420SemiPlanar:
 #ifdef USE_CSC_FIMC
-                    if ((pSECOutputPort->bIsANBEnabled == OMX_TRUE) && (pH264Dec->hFIMCHandle != NULL)) {
-                        void *pPhys[3];
-                        SEC_OSAL_GetPhysANB(pOutputData->dataBuffer, pPhys);
-                        pYUVBuf[0] = outputInfo.YPhyAddr;
-                        pYUVBuf[1] = outputInfo.CPhyAddr;
-                        csc_fimc_convert_nv12t(pH264Dec->hFIMCHandle, pPhys,
-                                            pYUVBuf, actualWidth, actualHeight,
-                                            OMX_SEC_COLOR_FormatANBYUV420SemiPlanar);
-                        break;
+                    if ((pSECOutputPort->bIsANBEnabled == OMX_TRUE) &&
+                        (useFIMC == OMX_TRUE)) {
+                        if (SEC_H264_ConvertToANBWithFIMC(
+                                    pH264Dec, pOutputData, &outputInfo,
+                                    actualWidth, actualHeight,
+                                    OMX_COLOR_FormatYUV420SemiPlanar) == OMX_TRUE)
+                            break;
+                        SEC_OSAL_Log(SEC_LOG_WARNING,
+                                     "FIMC CSC failed; falling back to NEON");
+                        ret = SEC_H264_LockANBForCPU(pOutputData, pSECOutputPort,
+                                                     &actualWidth, actualHeight,
+                                                     pYUVBuf, &anbLocked);
+                        if (ret != OMX_ErrorNone)
+                            goto EXIT;
                     }
 #endif
                     csc_tiled_to_linear_y_neon(
@@ -1747,15 +1880,20 @@ OMX_ERRORTYPE SEC_MFC_H264_Decode_Block(OMX_COMPONENTTYPE *pOMXComponent, SEC_OM
                 case OMX_COLOR_FormatYUV420Planar:
                 default:
 #ifdef USE_CSC_FIMC
-                    if ((pSECOutputPort->bIsANBEnabled == OMX_TRUE) && (pH264Dec->hFIMCHandle != NULL)) {
-                        void *pPhys[3];
-                        SEC_OSAL_GetPhysANB(pOutputData->dataBuffer, pPhys);
-                        pYUVBuf[0] = outputInfo.YPhyAddr;
-                        pYUVBuf[1] = outputInfo.CPhyAddr;
-                        csc_fimc_convert_nv12t(pH264Dec->hFIMCHandle, pPhys,
-                                            pYUVBuf, actualWidth, actualHeight,
-                                            OMX_COLOR_FormatYUV420Planar);
-                        break;
+                    if ((pSECOutputPort->bIsANBEnabled == OMX_TRUE) &&
+                        (useFIMC == OMX_TRUE)) {
+                        if (SEC_H264_ConvertToANBWithFIMC(
+                                    pH264Dec, pOutputData, &outputInfo,
+                                    actualWidth, actualHeight,
+                                    OMX_COLOR_FormatYUV420Planar) == OMX_TRUE)
+                            break;
+                        SEC_OSAL_Log(SEC_LOG_WARNING,
+                                     "FIMC CSC failed; falling back to NEON");
+                        ret = SEC_H264_LockANBForCPU(pOutputData, pSECOutputPort,
+                                                     &actualWidth, actualHeight,
+                                                     pYUVBuf, &anbLocked);
+                        if (ret != OMX_ErrorNone)
+                            goto EXIT;
                     }
 #endif
                     csc_tiled_to_linear_y_neon(
@@ -1774,7 +1912,7 @@ OMX_ERRORTYPE SEC_MFC_H264_Decode_Block(OMX_COMPONENTTYPE *pOMXComponent, SEC_OM
             }
 
 #ifdef USE_ANB
-            if (pSECOutputPort->bIsANBEnabled == OMX_TRUE) {
+            if (anbLocked == OMX_TRUE) {
                 SEC_OSAL_UnlockANB(pOutputData->dataBuffer);
             }
 #endif

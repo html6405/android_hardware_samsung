@@ -223,9 +223,13 @@ void Set_H264Enc_Param(SSBSIP_MFC_ENC_H264_PARAM *pH264Arg, SEC_OMX_BASECOMPONEN
     pH264Arg->LoopFilterDisable     = 1;    // 1: Loop Filter Disable, 0: Filter Enable
     pH264Arg->LoopFilterAlphaC0Offset = 0;
     pH264Arg->LoopFilterBetaOffset    = 0;
-    pH264Arg->SymbolMode       = 1;         // 0: CAVLC, 1: CABAC
+    pH264Arg->SymbolMode =
+            (pH264Enc->AVCComponent[OUTPUT_PORT_INDEX].eProfile ==
+             OMX_VIDEO_AVCProfileBaseline) ? 0 : 1; // 0: CAVLC, 1: CABAC
     pH264Arg->PictureInterlace = 0;
-    pH264Arg->Transform8x8Mode = 1;         // 0: 4x4, 1: allow 8x8
+    pH264Arg->Transform8x8Mode =
+            (pH264Enc->AVCComponent[OUTPUT_PORT_INDEX].eProfile ==
+             OMX_VIDEO_AVCProfileHigh) ? 1 : 0; // High profile only
     pH264Arg->DarkDisable     = 1;
     pH264Arg->SmoothDisable   = 1;
     pH264Arg->StaticDisable   = 1;

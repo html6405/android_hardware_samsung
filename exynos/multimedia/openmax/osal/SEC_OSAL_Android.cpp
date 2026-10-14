@@ -28,6 +28,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 
 
 #include <ui/GraphicBuffer.h>
@@ -37,11 +38,15 @@
 #include <hardware/hardware.h>
 #include <media/hardware/MetadataBufferType.h>
 
+#include "gralloc_priv.h"
+#include "sec_format.h"
+
 #include "SEC_OSAL_Semaphore.h"
 #include "SEC_OMX_Baseport.h"
 #include "SEC_OMX_Basecomponent.h"
 #include "SEC_OMX_Macros.h"
 #include "SEC_OMX_Vdec.h"
+#include "SEC_OSAL_Android.h"
 
 #undef  SEC_LOG_TAG
 #define SEC_LOG_TAG    "SEC_OSAL_Android"
@@ -159,10 +164,21 @@ OMX_ERRORTYPE SEC_OSAL_LockANBHandle(
     case OMX_SEC_COLOR_FormatYUV420Planar_TB_RL:
 #endif
     case OMX_SEC_COLOR_FormatANBYUV420SemiPlanar:
-        usage = GRALLOC_USAGE_SW_READ_OFTEN | GRALLOC_USAGE_SW_WRITE_OFTEN | GRALLOC_USAGE_YUV_ADDR;
+        /*
+         * The decoder is the producer of these buffers.  It never reads the
+         * old contents, so asking gralloc for SW_READ_OFTEN needlessly
+         * invalidates the complete buffer before every frame.  At 720p/1080p
+         * that cache operation is large enough to starve the native window.
+         */
+        usage = GRALLOC_USAGE_SW_WRITE_OFTEN;
+        break;
+    case OMX_COLOR_FormatAndroidOpaque:
+        // The video encoder copies this GPU-produced input into its MFC
+        // staging buffer.  It is a CPU reader, never the buffer producer.
+        usage = GRALLOC_USAGE_SW_READ_OFTEN;
         break;
     default:
-        usage = GRALLOC_USAGE_SW_READ_OFTEN | GRALLOC_USAGE_SW_WRITE_OFTEN;
+        usage = GRALLOC_USAGE_SW_WRITE_OFTEN;
         break;
     }
 
@@ -211,22 +227,76 @@ OMX_ERRORTYPE SEC_OSAL_GetPhysANBHandle(
     FunctionIn();
 
     OMX_ERRORTYPE ret = OMX_ErrorNone;
-    GraphicBufferMapper &mapper = GraphicBufferMapper::get();
     buffer_handle_t bufferHandle = (buffer_handle_t) handle;
+    private_handle_t *hnd = private_handle_t::dynamicCast(bufferHandle);
+    const bool yv12 = hnd != NULL && hnd->format == HAL_PIXEL_FORMAT_YV12;
 
     SEC_OSAL_Log(SEC_LOG_TRACE, "%s: handle: 0x%x", __func__, handle);
 
-/*
-    if (mapper.getphys(bufferHandle, paddr) != 0) {
-        SEC_OSAL_Log(SEC_LOG_ERROR, "%s: mapper.getphys() fail", __func__);
-        ret = OMX_ErrorUndefined;
+    if (paddr == NULL || hnd == NULL || hnd->paddr == 0) {
+        SEC_OSAL_Log(SEC_LOG_ERROR, "%s: invalid or non-contiguous buffer", __func__);
+        ret = OMX_ErrorBadParameter;
         goto EXIT;
     }
-*/
+
+    /*
+     * FIMC consumes physical plane addresses. All video ANBs are allocated
+     * from contiguous ION and gralloc records the chroma offsets in the
+     * legacy 21-word handle, so no process-local pointer is used here.
+     */
+    paddr[0] = reinterpret_cast<void *>(
+            static_cast<uintptr_t>(hnd->paddr + hnd->offset));
+    paddr[1] = reinterpret_cast<void *>(static_cast<uintptr_t>(
+            hnd->paddr + hnd->offset + (yv12 ? hnd->voffset : hnd->uoffset)));
+    paddr[2] = reinterpret_cast<void *>(static_cast<uintptr_t>(
+            hnd->paddr + hnd->offset +
+            (yv12 ? hnd->uoffset : hnd->uoffset + hnd->voffset)));
 EXIT:
     FunctionOut();
 
     return ret;
+}
+
+OMX_ERRORTYPE SEC_OSAL_GetANBInfoHandle(
+    OMX_IN OMX_U32 handle,
+    OMX_OUT SEC_OSAL_ANB_FORMATTYPE *format,
+    OMX_OUT OMX_U32 *stride,
+    OMX_OUT OMX_U32 *chromaOffset)
+{
+    buffer_handle_t bufferHandle = (buffer_handle_t)handle;
+    private_handle_t *hnd = private_handle_t::dynamicCast(bufferHandle);
+
+    if (format == NULL || stride == NULL || chromaOffset == NULL)
+        return OMX_ErrorBadParameter;
+
+    *format = SEC_OSAL_ANB_FORMAT_UNKNOWN;
+    *stride = 0;
+    *chromaOffset = 0;
+
+    if (hnd == NULL || hnd->stride <= 0)
+        return OMX_ErrorBadParameter;
+
+    switch (hnd->format) {
+    case HAL_PIXEL_FORMAT_YCbCr_420_SP:
+        *format = SEC_OSAL_ANB_FORMAT_NV12;
+        break;
+    case HAL_PIXEL_FORMAT_YCrCb_420_SP:
+        *format = SEC_OSAL_ANB_FORMAT_NV21;
+        break;
+    case HAL_PIXEL_FORMAT_RGBA_8888:
+    case HAL_PIXEL_FORMAT_RGBX_8888:
+    case HAL_PIXEL_FORMAT_BGRA_8888:
+        *format = SEC_OSAL_ANB_FORMAT_ABGR8888;
+        break;
+    default:
+        SEC_OSAL_Log(SEC_LOG_ERROR, "%s: unsupported gralloc format 0x%x",
+                     __func__, hnd->format);
+        return OMX_ErrorUnsupportedSetting;
+    }
+
+    *stride = hnd->stride;
+    *chromaOffset = hnd->uoffset;
+    return OMX_ErrorNone;
 }
 
 OMX_ERRORTYPE SEC_OSAL_LockANB(
@@ -241,15 +311,81 @@ OMX_ERRORTYPE SEC_OSAL_LockANB(
 
     OMX_ERRORTYPE ret = OMX_ErrorNone;
     android_native_buffer_t *pANB = (android_native_buffer_t *) pBuffer;
+    private_handle_t *hnd = private_handle_t::dynamicCast(pANB->handle);
+    uint64_t allocatedHeight = 0;
+    if (hnd == NULL || hnd->uoffset == 0 || hnd->size <= 0 ||
+        hnd->uoffset >= static_cast<unsigned>(hnd->size)) {
+        ret = OMX_ErrorBadParameter;
+        goto EXIT;
+    }
+    if ((format == OMX_COLOR_FormatYUV420Planar ||
+         format == OMX_COLOR_FormatYCbCr420Planar) &&
+        hnd->format != HAL_PIXEL_FORMAT_YV12 &&
+        hnd->format != HAL_PIXEL_FORMAT_YCbCr_420_P) {
+        SEC_OSAL_Log(SEC_LOG_ERROR, "%s: planar OMX output requires planar ANB", __func__);
+        ret = OMX_ErrorUnsupportedSetting;
+        goto EXIT;
+    }
+    if (format == OMX_COLOR_FormatYUV420SemiPlanar &&
+        (hnd->format == HAL_PIXEL_FORMAT_YV12 ||
+         hnd->format == HAL_PIXEL_FORMAT_YCbCr_420_P)) {
+        SEC_OSAL_Log(SEC_LOG_ERROR, "%s: semiplanar OMX output requires semiplanar ANB", __func__);
+        ret = OMX_ErrorUnsupportedSetting;
+        goto EXIT;
+    }
 
-    ret = SEC_OSAL_LockANBHandle((OMX_U32)pANB->handle, width, height, format, vaddr);
+    // MFC reports macroblock-aligned output dimensions.  The native window
+    // buffer describes the visible frame, while its stride (and, for the
+    // Exynos planar format, padded height) provides room for that output.
+    // A mapper lock rectangle must describe visible pixels, not the padded
+    // MFC write extent.  Check the latter separately before permitting the
+    // decoder to write into the mapped allocation.
+    allocatedHeight = hnd->format == HAL_PIXEL_FORMAT_YCbCr_420_P
+            ? (static_cast<uint64_t>(hnd->height) + 31) & ~uint64_t{31}
+            : static_cast<uint64_t>(hnd->height);
+    if (hnd->width <= 0 || hnd->height <= 0 || hnd->stride <= 0 ||
+        pANB->stride != static_cast<OMX_U32>(hnd->stride) ||
+        width == 0 || height == 0 || width > static_cast<OMX_U32>(hnd->stride) ||
+        height > allocatedHeight) {
+        SEC_OSAL_Log(SEC_LOG_ERROR,
+                     "%s: MFC output %ux%u exceeds ANB %dx%d stride %d padded height %llu",
+                     __func__, width, height, hnd->width, hnd->height, hnd->stride,
+                     static_cast<unsigned long long>(allocatedHeight));
+        ret = OMX_ErrorBadParameter;
+        goto EXIT;
+    }
 
-    // Extract pointers for YUV-adresses and free memory
-    void **pAddr = (void **)vaddr[0];
-    vaddr[0] = pAddr[0];
-    vaddr[1] = pAddr[1];
-    vaddr[2] = pAddr[2];
-    free(pAddr);
+    ret = SEC_OSAL_LockANBHandle((OMX_U32)pANB->handle, hnd->width, hnd->height,
+                                 format, vaddr);
+    if (ret != OMX_ErrorNone)
+        goto EXIT;
+
+    // Mapper5 returns the mapped buffer, not the legacy YUV_ADDR pointer array.
+    // Use the serialized plane offsets that accompany the 21-word handle.
+    if (vaddr[0] == NULL) {
+        SEC_OSAL_UnlockANBHandle((OMX_U32)pANB->handle);
+        ret = OMX_ErrorUndefined;
+        goto EXIT;
+    }
+    if (hnd->format == HAL_PIXEL_FORMAT_YV12 ||
+        hnd->format == HAL_PIXEL_FORMAT_YCbCr_420_P) {
+        if (hnd->voffset == 0 || hnd->voffset >= static_cast<unsigned>(hnd->size)) {
+            SEC_OSAL_UnlockANBHandle((OMX_U32)pANB->handle);
+            ret = OMX_ErrorBadParameter;
+            goto EXIT;
+        }
+        if (hnd->format == HAL_PIXEL_FORMAT_YV12) {
+            vaddr[1] = static_cast<unsigned char *>(vaddr[0]) + hnd->voffset; // Cb
+            vaddr[2] = static_cast<unsigned char *>(vaddr[0]) + hnd->uoffset; // Cr
+        } else {
+            vaddr[1] = static_cast<unsigned char *>(vaddr[0]) + hnd->uoffset; // Cb
+            vaddr[2] = static_cast<unsigned char *>(vaddr[0]) +
+                       hnd->uoffset + hnd->voffset; // Cr
+        }
+    } else {
+        vaddr[1] = static_cast<unsigned char *>(vaddr[0]) + hnd->uoffset;
+        vaddr[2] = NULL;
+    }
 
     *pStride = pANB->stride;
 
@@ -348,10 +484,14 @@ OMX_ERRORTYPE SEC_OSAL_GetANBParameter(
             goto EXIT;
         }
 
-        /* NOTE: OMX_IndexParamGetAndroidNativeBuffer returns original 'nUsage' without any
-         * modifications since currently not defined what the 'nUsage' is for.
+        /*
+         * Frames are converted from MFC tiled output into the ANB by FIMC,
+         * with a CPU fallback if the converter is unavailable. Advertise the
+         * fallback producer access and the Exynos HWC consumer so gralloc
+         * supplies contiguous memory and video stays off the Mali path.
          */
-        pANBParams->nUsage |= 0;
+        pANBParams->nUsage |= GRALLOC_USAGE_SW_WRITE_OFTEN |
+                              GRALLOC_USAGE_HW_COMPOSER;
     }
         break;
 

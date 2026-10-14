@@ -37,6 +37,13 @@
 extern "C" {
 #endif
 
+typedef enum {
+    SEC_OSAL_ANB_FORMAT_UNKNOWN = 0,
+    SEC_OSAL_ANB_FORMAT_ABGR8888,
+    SEC_OSAL_ANB_FORMAT_NV12,
+    SEC_OSAL_ANB_FORMAT_NV21,
+} SEC_OSAL_ANB_FORMATTYPE;
+
 OMX_ERRORTYPE SEC_OSAL_GetANBParameter(OMX_IN OMX_HANDLETYPE hComponent,
                                        OMX_IN OMX_INDEXTYPE nIndex,
                                        OMX_INOUT OMX_PTR ComponentParameterStructure);
@@ -67,6 +74,12 @@ OMX_ERRORTYPE SEC_OSAL_UnlockANBHandle(OMX_IN OMX_U32 pBuffer);
 
 OMX_ERRORTYPE SEC_OSAL_GetPhysANBHandle(OMX_IN OMX_U32 pBuffer,
                                         OMX_OUT OMX_PTR *paddr);
+
+OMX_ERRORTYPE SEC_OSAL_GetANBInfoHandle(
+    OMX_IN OMX_U32 pBuffer,
+    OMX_OUT SEC_OSAL_ANB_FORMATTYPE *format,
+    OMX_OUT OMX_U32 *stride,
+    OMX_OUT OMX_U32 *chromaOffset);
 
 OMX_ERRORTYPE SEC_OSAL_GetInfoFromMetaData(OMX_IN SEC_OMX_DATA *pBuffer,
                                            OMX_OUT OMX_PTR *pOutBuffer);
