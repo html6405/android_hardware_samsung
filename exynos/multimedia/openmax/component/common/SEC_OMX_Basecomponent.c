@@ -203,6 +203,7 @@ OMX_ERRORTYPE SEC_OMX_ComponentStateSet(OMX_COMPONENTTYPE *pOMXComponent, OMX_U3
     OMX_S32                countValue = 0;
     unsigned int           i = 0, j = 0;
     int                    k = 0;
+    OMX_BOOL               resourceAcquired = OMX_FALSE;
 
     FunctionIn();
 
@@ -221,6 +222,7 @@ OMX_ERRORTYPE SEC_OMX_ComponentStateSet(OMX_COMPONENTTYPE *pOMXComponent, OMX_U3
         if (ret != OMX_ErrorNone) {
             goto EXIT;
         }
+        resourceAcquired = OMX_TRUE;
     }
     if (((currentState == OMX_StateIdle) && (destState == OMX_StateLoaded))       ||
         ((currentState == OMX_StateIdle) && (destState == OMX_StateInvalid))      ||
@@ -318,6 +320,8 @@ OMX_ERRORTYPE SEC_OMX_ComponentStateSet(OMX_COMPONENTTYPE *pOMXComponent, OMX_U3
                 } else {
                     if (CHECK_PORT_ENABLED(pSECPort)) {
                         SEC_OSAL_SemaphoreWait(pSECPort->unloadedResource);
+                        if (pSECComponent->bExitMessageHandlerThread == OMX_TRUE)
+                            goto EXIT;
                         pSECPort->portDefinition.bPopulated = OMX_FALSE;
                     }
                 }
@@ -353,6 +357,8 @@ OMX_ERRORTYPE SEC_OMX_ComponentStateSet(OMX_COMPONENTTYPE *pOMXComponent, OMX_U3
                 } else {
                     if (CHECK_PORT_ENABLED(pSECPort)) {
                         SEC_OSAL_SemaphoreWait(pSECComponent->pSECPort[i].loadedResource);
+                        if (pSECComponent->bExitMessageHandlerThread == OMX_TRUE)
+                            goto EXIT;
                         pSECPort->portDefinition.bPopulated = OMX_TRUE;
                     }
                 }
@@ -504,7 +510,15 @@ OMX_ERRORTYPE SEC_OMX_ComponentStateSet(OMX_COMPONENTTYPE *pOMXComponent, OMX_U3
     }
 
 EXIT:
-    if (ret == OMX_ErrorNone) {
+    if ((resourceAcquired == OMX_TRUE) &&
+        ((pSECComponent->bExitMessageHandlerThread == OMX_TRUE) ||
+         (ret != OMX_ErrorNone)))
+        SEC_OMX_Release_Resource(pOMXComponent);
+
+    if (pSECComponent->bExitMessageHandlerThread == OMX_TRUE) {
+        FunctionOut();
+        return ret;
+    } else if (ret == OMX_ErrorNone) {
         if (pSECComponent->pCallbacks != NULL) {
             pSECComponent->pCallbacks->EventHandler((OMX_HANDLETYPE)pOMXComponent,
             pSECComponent->callbackData,
@@ -548,6 +562,8 @@ static OMX_ERRORTYPE SEC_OMX_MessageHandlerThread(OMX_PTR threadData)
 
     while (pSECComponent->bExitMessageHandlerThread == OMX_FALSE) {
         SEC_OSAL_SemaphoreWait(pSECComponent->msgSemaphoreHandle);
+        if (pSECComponent->bExitMessageHandlerThread == OMX_TRUE)
+            break;
         message = (SEC_OMX_MESSAGE *)SEC_OSAL_Dequeue(&pSECComponent->messageQ);
         if (message != NULL) {
             messageType = message->messageType;
@@ -1486,7 +1502,6 @@ OMX_ERRORTYPE SEC_OMX_BaseComponent_Destructor(
     OMX_ERRORTYPE          ret = OMX_ErrorNone;
     OMX_COMPONENTTYPE     *pOMXComponent = NULL;
     SEC_OMX_BASECOMPONENT *pSECComponent = NULL;
-    OMX_S32                semaValue = 0;
 
     FunctionIn();
 
@@ -1506,15 +1521,9 @@ OMX_ERRORTYPE SEC_OMX_BaseComponent_Destructor(
     }
     pSECComponent = (SEC_OMX_BASECOMPONENT *)pOMXComponent->pComponentPrivate;
 
-    SEC_OMX_CommandQueue(pSECComponent, SEC_OMX_CommandComponentDeInit, 0, NULL);
-    SEC_OSAL_SleepMillisec(0);
-    SEC_OSAL_Get_SemaphoreCount(pSECComponent->msgSemaphoreHandle, &semaValue);
-    if (semaValue == 0)
-        SEC_OSAL_SemaphorePost(pSECComponent->msgSemaphoreHandle);
-    SEC_OSAL_SemaphorePost(pSECComponent->msgSemaphoreHandle);
-
-    SEC_OSAL_ThreadTerminate(pSECComponent->hMessageHandler);
-    pSECComponent->hMessageHandler = NULL;
+    ret = SEC_OMX_BaseComponent_ThreadStop(hComponent);
+    if (ret != OMX_ErrorNone)
+        goto EXIT;
 
     SEC_OSAL_MutexTerminate(pSECComponent->compMutex);
     pSECComponent->compMutex = NULL;
@@ -1532,4 +1541,48 @@ EXIT:
     return ret;
 }
 
+OMX_ERRORTYPE SEC_OMX_BaseComponent_ThreadStop(
+    OMX_IN OMX_HANDLETYPE hComponent)
+{
+    OMX_COMPONENTTYPE     *pOMXComponent = NULL;
+    SEC_OMX_BASECOMPONENT *pSECComponent = NULL;
+    OMX_U32                i = 0;
 
+    if (hComponent == NULL)
+        return OMX_ErrorBadParameter;
+
+    pOMXComponent = (OMX_COMPONENTTYPE *)hComponent;
+    if (SEC_OMX_Check_SizeVersion(pOMXComponent, sizeof(OMX_COMPONENTTYPE)) != OMX_ErrorNone)
+        return OMX_ErrorBadParameter;
+    if (pOMXComponent->pComponentPrivate == NULL)
+        return OMX_ErrorBadParameter;
+
+    pSECComponent = (SEC_OMX_BASECOMPONENT *)pOMXComponent->pComponentPrivate;
+    if (pSECComponent->hMessageHandler == NULL)
+        return OMX_ErrorNone;
+
+    /*
+     * ComponentDeInit may race a pending Loaded <-> Idle transition.  Those
+     * transitions wait for the client to allocate or free every port buffer,
+     * so queueing a deinit message behind them can never wake the handler.
+     * Mark the handler as stopping first and release every transition wait;
+     * SEC_OMX_ComponentStateSet then leaves without touching codec resources.
+     */
+    pSECComponent->bExitMessageHandlerThread = OMX_TRUE;
+    if (pSECComponent->pSECPort != NULL) {
+        for (i = 0; i < pSECComponent->portParam.nPorts; i++) {
+            if (pSECComponent->pSECPort[i].loadedResource != NULL)
+                SEC_OSAL_SemaphorePost(pSECComponent->pSECPort[i].loadedResource);
+            if (pSECComponent->pSECPort[i].unloadedResource != NULL)
+                SEC_OSAL_SemaphorePost(pSECComponent->pSECPort[i].unloadedResource);
+        }
+    }
+    if (pSECComponent->msgSemaphoreHandle != NULL)
+        SEC_OSAL_SemaphorePost(pSECComponent->msgSemaphoreHandle);
+
+    if (SEC_OSAL_ThreadTerminate(pSECComponent->hMessageHandler) != OMX_ErrorNone)
+        return OMX_ErrorUndefined;
+    pSECComponent->hMessageHandler = NULL;
+
+    return OMX_ErrorNone;
+}

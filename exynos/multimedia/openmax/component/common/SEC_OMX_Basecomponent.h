@@ -175,6 +175,7 @@ OMX_ERRORTYPE SEC_OMX_GetExtensionIndex(
     OMX_OUT OMX_INDEXTYPE *pIndexType);
 
 OMX_ERRORTYPE SEC_OMX_BaseComponent_Constructor(OMX_IN OMX_HANDLETYPE hComponent);
+OMX_ERRORTYPE SEC_OMX_BaseComponent_ThreadStop(OMX_IN OMX_HANDLETYPE hComponent);
 OMX_ERRORTYPE SEC_OMX_BaseComponent_Destructor(OMX_IN OMX_HANDLETYPE hComponent);
 
 #ifdef __cplusplus

@@ -886,6 +886,10 @@ OMX_ERRORTYPE SEC_OMX_ComponentDeinit(OMX_HANDLETYPE hComponent)
     pOMXComponent = (OMX_COMPONENTTYPE *)hComponent;
     pSECComponent = (SEC_OMX_BASECOMPONENT *)pOMXComponent->pComponentPrivate;
 
+    ret = SEC_OMX_BaseComponent_ThreadStop(pOMXComponent);
+    if (ret != OMX_ErrorNone)
+        goto EXIT;
+
     SEC_OSAL_Free(pSECComponent->componentName);
     pSECComponent->componentName = NULL;
     if (pSECComponent->processData[INPUT_PORT_INDEX].dataBuffer) {
