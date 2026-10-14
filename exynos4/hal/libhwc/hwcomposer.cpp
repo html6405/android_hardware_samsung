@@ -163,9 +163,8 @@ static bool supports_fimc(const hwc_layer_1_t &layer)
 {
     private_handle_t *handle = private_handle_t::dynamicCast(layer.handle);
 
-/* TODO: look in kernel for min/max size */
-
-    return format_is_supported_by_fimc(handle->format);
+    return handle != NULL && handle->paddr != 0 &&
+           format_is_supported_by_fimc(handle->format);
 }
 
 static bool format_is_supported(int format)
@@ -218,12 +217,12 @@ static enum gsc_map_t::mode layer_requires_process(hwc_layer_1_t &layer)
         break;
 
     case gsc_map_t::FIMC:
-        if (is_scaled(layer)) {
-            // FIMC _should_ be able to do scaling
-            // but it doesn't seem to work well.
-            // Disable it for now.
-            mode = gsc_map_t::NONE;
-        }
+        /*
+         * The Exynos FIMC output driver programs its scaler from the source
+         * crop and destination window. Keeping scaled YUV on FIMC is vital:
+         * video normally has to be fitted to the 1280x800 panel, and sending
+         * it back to GLES makes Mali perform conversion and scaling at 60 Hz.
+         */
         break;
 
     default:
@@ -910,10 +909,10 @@ static int perform_fimc(hwc_context_t *ctx, const hwc_layer_1_t &layer, struct h
 
     if (rotate == 90 || rotate == 270) {
         w = HEIGHT(layer.displayFrame);
-        h = EXYNOS4_ALIGN(WIDTH(layer.displayFrame), 16);
+        h = WIDTH(layer.displayFrame);
     } else {
         w = WIDTH(layer.displayFrame);
-        h = EXYNOS4_ALIGN(HEIGHT(layer.displayFrame), 16);
+        h = HEIGHT(layer.displayFrame);
     }
 
     ret = v4l2_s_fbuf(ctx, (void *)dst_addr, w, h, V4L2_PIX_FMT_RGB32);
@@ -1473,7 +1472,7 @@ static void hwc_dump(struct hwc_composer_device_1* dev, char *buff, int buff_len
     else
         ctx->is_overlay_supported = is_overlay_supported;
 
-    strlcpy(buff, tmp.string(), buff_len);
+    strlcpy(buff, tmp.c_str(), buff_len);
 }
 
 /*****************************************************************************/
