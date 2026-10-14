@@ -240,15 +240,20 @@ addRequestToList(int serial, int slotId, int request) {
 #endif
 
     CommandInfo *pCI = NULL;
-    if (request > RIL_OEM_REQUEST_BASE) {
+    if (request >= RIL_OEM_REQUEST_BASE) {
         int index = request - RIL_OEM_REQUEST_BASE;
         RLOGD("processCommandBuffer: samsung request=%d, index=%d",
                 request, index);
-        if (index < (int32_t)NUM_ELEMS(s_commands_v))
+        if (index >= 0 && index < (int32_t)NUM_ELEMS(s_commands_v))
             pCI = &(s_commands_v[index]);
     } else {
-        if (request < (int32_t)NUM_ELEMS(s_commands))
+        if (request >= 0 && request < (int32_t)NUM_ELEMS(s_commands))
             pCI = &(s_commands[request]);
+    }
+
+    if (pCI == NULL) {
+        RLOGE("No command descriptor for request %d", request);
+        return NULL;
     }
 
     pRI = (RequestInfo *)calloc(1, sizeof(RequestInfo));
@@ -480,7 +485,7 @@ RIL_register (const RIL_RadioFunctions *callbacks) {
     }
 
     for (int i = 0; i < (int)NUM_ELEMS(s_commands_v); i++) {
-        assert(i + RIL_OEM_REQUEST_BASE == s_commands[i].requestNumber);
+        assert(i + RIL_OEM_REQUEST_BASE == s_commands_v[i].requestNumber);
     }
 
     for (int i = 0; i < (int)NUM_ELEMS(s_unsolResponses); i++) {
@@ -490,7 +495,8 @@ RIL_register (const RIL_RadioFunctions *callbacks) {
 
     for (int i = 0; i < (int)NUM_ELEMS(s_unsolResponses_v); i++) {
         assert(i + SAMSUNG_UNSOL_RESPONSE_BASE
-                == s_unsolResponses[i].requestNumber);
+                == s_unsolResponses_v[i].requestNumber
+                || s_unsolResponses_v[i].requestNumber >= 20000);
     }
 
     radio::registerService(&s_callbacks, s_commands);
@@ -793,7 +799,7 @@ void RIL_onUnsolicitedResponse(int unsolResponse, const void *data,
     pRI_elements = (int32_t)NUM_ELEMS(s_unsolResponses);
 
     /* Hack to include Samsung responses */
-    if (unsolResponse > SAMSUNG_UNSOL_RESPONSE_BASE) {
+    if (unsolResponse >= SAMSUNG_UNSOL_RESPONSE_BASE) {
         pRI = s_unsolResponses_v;
         pRI_elements = (int32_t)NUM_ELEMS(s_unsolResponses_v);
 
