@@ -867,20 +867,27 @@ OMX_BOOL SEC_Preprocessor_InputData(OMX_COMPONENTTYPE *pOMXComponent)
                                     return OMX_FALSE;
                                 }
                                 srcChroma = srcY + chromaOffset;
-                                for (row = 0; row < height; row++) {
-                                    SEC_OSAL_Memcpy(dstY + row * width,
-                                                    srcY + row * stride, width);
-                                }
-                                for (row = 0; row < height / 2; row++) {
-                                    OMX_U8 *srcRow = srcChroma + row * stride;
-                                    OMX_U8 *dstRow = dstUV + row * width;
-                                    if (anbFormat == SEC_OSAL_ANB_FORMAT_NV12) {
-                                        SEC_OSAL_Memcpy(dstRow, srcRow, width);
-                                    } else {
-                                        for (column = 0; column + 1 < width;
-                                             column += 2) {
-                                            dstRow[column] = srcRow[column + 1];
-                                            dstRow[column + 1] = srcRow[column];
+                                if (anbFormat == SEC_OSAL_ANB_FORMAT_NV12 &&
+                                    stride == width) {
+                                    SEC_OSAL_Memcpy(dstY, srcY, width * height);
+                                    SEC_OSAL_Memcpy(dstUV, srcChroma,
+                                                    width * (height / 2));
+                                } else {
+                                    for (row = 0; row < height; row++) {
+                                        SEC_OSAL_Memcpy(dstY + row * width,
+                                                        srcY + row * stride, width);
+                                    }
+                                    for (row = 0; row < height / 2; row++) {
+                                        OMX_U8 *srcRow = srcChroma + row * stride;
+                                        OMX_U8 *dstRow = dstUV + row * width;
+                                        if (anbFormat == SEC_OSAL_ANB_FORMAT_NV12) {
+                                            SEC_OSAL_Memcpy(dstRow, srcRow, width);
+                                        } else {
+                                            for (column = 0; column + 1 < width;
+                                                 column += 2) {
+                                                dstRow[column] = srcRow[column + 1];
+                                                dstRow[column + 1] = srcRow[column];
+                                            }
                                         }
                                     }
                                 }
