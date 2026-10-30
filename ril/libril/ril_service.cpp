@@ -1587,9 +1587,10 @@ Return<void> RadioImpl::setupDataCall(int32_t serial, RadioTechnology radioTechn
     if (s_vendorFunctions->version >= 4 && s_vendorFunctions->version <= 14) {
         const hidl_string &protocol =
                 (isRoaming ? dataProfileInfo.roamingProtocol : dataProfileInfo.protocol);
-        RLOGI("setupDataCall: slot %d legacy RAT %d, v7 RAT parameter %d, APN '%s'",
+        RLOGI("setupDataCall: slot %d legacy RAT %d, v7 RAT parameter %d, profile %d, APN '%s'",
                 mSlotId, static_cast<int>(radioTechnology),
-                static_cast<int>(radioTechnology) + 2, dataProfileInfo.apn.c_str());
+                static_cast<int>(radioTechnology) + 2,
+                static_cast<int>(dataProfileInfo.profileId), dataProfileInfo.apn.c_str());
         dispatchStrings(serial, mSlotId, RIL_REQUEST_SETUP_DATA_CALL, true, 7,
             std::to_string((int) radioTechnology + 2).c_str(),
             std::to_string((int) dataProfileInfo.profileId).c_str(),
@@ -5082,6 +5083,8 @@ int radio::setupDataCallResponse(int slotId,
             if (!valid) {
                 if (e == RIL_E_SUCCESS) responseInfo.error = V1_6::RadioError::INVALID_RESPONSE;
                 result.cause = V1_6::DataCallFailCause::ERROR_UNSPECIFIED;
+                // No modem payload means no suggested delay, not an immediate retry.
+                result.suggestedRetryTime = -1;
                 result.type = V1_4::PdpProtocolType::UNKNOWN;
             } else {
                 convertRilDataCallToHal_1_6(response, responseLen, result);
@@ -5096,6 +5099,7 @@ int radio::setupDataCallResponse(int slotId,
             if (!valid) {
                 if (e == RIL_E_SUCCESS) responseInfo.error = RadioError::INVALID_RESPONSE;
                 result.status = DataCallFailCause::ERROR_UNSPECIFIED;
+                result.suggestedRetryTime = -1;
                 result.type = hidl_string();
                 result.ifname = hidl_string();
                 result.addresses = hidl_string();
@@ -10733,7 +10737,10 @@ static bool rafToLegacyNetworkType(uint32_t raf, int *networkType) {
 
 static DataProfileInfo legacyProfile(const V1_4::DataProfileInfo& in) {
     DataProfileInfo out = {};
-    out.profileId = static_cast<DataProfileId>(in.profileId);
+    // Modern frameworks use INVALID for transient APN profiles. The old
+    // string ABI needs DEFAULT (0), not the negative sentinel.
+    out.profileId = static_cast<int32_t>(in.profileId) < 0
+            ? DataProfileId::DEFAULT : static_cast<DataProfileId>(in.profileId);
     out.apn = in.apn;
     out.protocol = legacyPdpProtocol(static_cast<int32_t>(in.protocol));
     out.roamingProtocol = legacyPdpProtocol(static_cast<int32_t>(in.roamingProtocol));
@@ -10755,7 +10762,10 @@ static DataProfileInfo legacyProfile(const V1_4::DataProfileInfo& in) {
 
 static DataProfileInfo legacyProfile(const V1_5::DataProfileInfo& in) {
     DataProfileInfo out = {};
-    out.profileId = static_cast<DataProfileId>(in.profileId);
+    // Modern frameworks use INVALID for transient APN profiles. The old
+    // string ABI needs DEFAULT (0), not the negative sentinel.
+    out.profileId = static_cast<int32_t>(in.profileId) < 0
+            ? DataProfileId::DEFAULT : static_cast<DataProfileId>(in.profileId);
     out.apn = in.apn;
     out.protocol = legacyPdpProtocol(static_cast<int32_t>(in.protocol));
     out.roamingProtocol = legacyPdpProtocol(static_cast<int32_t>(in.roamingProtocol));
