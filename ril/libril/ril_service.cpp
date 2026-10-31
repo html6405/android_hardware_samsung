@@ -1585,8 +1585,14 @@ Return<void> RadioImpl::setupDataCall(int32_t serial, RadioTechnology radioTechn
 #endif
 
     if (s_vendorFunctions->version >= 4 && s_vendorFunctions->version <= 14) {
-        const hidl_string &protocol =
+        std::string protocol =
                 (isRoaming ? dataProfileInfo.roamingProtocol : dataProfileInfo.protocol);
+        // Some legacy modems return IPv4 parameters for a dual-stack request,
+        // which their vendor RIL incorrectly processes as IPv6 parameters.
+        if (protocol == "IPV4V6" && property_get_bool("ro.vendor.ril.ipv4_only", false)) {
+            RLOGI("setupDataCall: using IPv4 for legacy dual-stack request");
+            protocol = "IP";
+        }
         RLOGI("setupDataCall: slot %d legacy RAT %d, v7 RAT parameter %d, profile %d, APN '%s'",
                 mSlotId, static_cast<int>(radioTechnology),
                 static_cast<int>(radioTechnology) + 2,
