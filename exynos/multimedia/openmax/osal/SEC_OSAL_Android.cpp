@@ -247,7 +247,7 @@ OMX_ERRORTYPE SEC_OSAL_GetPhysANBHandle(
     paddr[0] = reinterpret_cast<void *>(
             static_cast<uintptr_t>(hnd->paddr + hnd->offset));
     paddr[1] = reinterpret_cast<void *>(static_cast<uintptr_t>(
-            hnd->paddr + hnd->offset + (yv12 ? hnd->voffset : hnd->uoffset)));
+            hnd->paddr + hnd->offset + (yv12 ? hnd->uoffset + hnd->voffset : hnd->uoffset)));
     paddr[2] = reinterpret_cast<void *>(static_cast<uintptr_t>(
             hnd->paddr + hnd->offset +
             (yv12 ? hnd->uoffset : hnd->uoffset + hnd->voffset)));
@@ -360,8 +360,8 @@ OMX_ERRORTYPE SEC_OSAL_LockANB(
     if (ret != OMX_ErrorNone)
         goto EXIT;
 
-    // Mapper5 returns the mapped buffer, not the legacy YUV_ADDR pointer array.
-    // Use the serialized plane offsets that accompany the 21-word handle.
+    // The lock requests a mapped buffer without GRALLOC_USAGE_YUV_ADDR.
+    // Legacy gralloc stores voffset relative to the first chroma plane.
     if (vaddr[0] == NULL) {
         SEC_OSAL_UnlockANBHandle((OMX_U32)pANB->handle);
         ret = OMX_ErrorUndefined;
@@ -369,13 +369,13 @@ OMX_ERRORTYPE SEC_OSAL_LockANB(
     }
     if (hnd->format == HAL_PIXEL_FORMAT_YV12 ||
         hnd->format == HAL_PIXEL_FORMAT_YCbCr_420_P) {
-        if (hnd->voffset == 0 || hnd->voffset >= static_cast<unsigned>(hnd->size)) {
+        if (hnd->voffset == 0 || hnd->voffset >= static_cast<unsigned>(hnd->size) - hnd->uoffset) {
             SEC_OSAL_UnlockANBHandle((OMX_U32)pANB->handle);
             ret = OMX_ErrorBadParameter;
             goto EXIT;
         }
         if (hnd->format == HAL_PIXEL_FORMAT_YV12) {
-            vaddr[1] = static_cast<unsigned char *>(vaddr[0]) + hnd->voffset; // Cb
+            vaddr[1] = static_cast<unsigned char *>(vaddr[0]) + hnd->uoffset + hnd->voffset; // Cb
             vaddr[2] = static_cast<unsigned char *>(vaddr[0]) + hnd->uoffset; // Cr
         } else {
             vaddr[1] = static_cast<unsigned char *>(vaddr[0]) + hnd->uoffset; // Cb

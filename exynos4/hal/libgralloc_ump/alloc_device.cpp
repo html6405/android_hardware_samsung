@@ -424,6 +424,8 @@ static int gralloc_alloc_buffer(alloc_device_t* dev, size_t size, int usage,
                          format == HAL_PIXEL_FORMAT_YCrCb_420_SP)) {
                         hnd->uoffset = round_up_to_page_size(
                                 static_cast<size_t>(hnd->width) * hnd->height);
+                    } else if (format == HAL_PIXEL_FORMAT_YCbCr_420_P) {
+                        hnd->uoffset = EXYNOS4_ALIGN(w, 32) * EXYNOS4_ALIGN(h, 32);
                     } else if (format == HAL_PIXEL_FORMAT_YCrCb_420_SP) {
                         hnd->uoffset = EXYNOS4_ALIGN(hnd->width, 16) *
                                 hnd->height;
@@ -663,8 +665,8 @@ static int alloc_device_alloc(alloc_device_t* dev, int w, int h, int format,
                           ? "NV12" : "NV21");
         }
 
-        stride = EXYNOS4_ALIGN(w, 16);
-        vstride = EXYNOS4_ALIGN(h, 16);
+        stride = EXYNOS4_ALIGN(w, format == HAL_PIXEL_FORMAT_YCbCr_420_P ? 32 : 16);
+        vstride = EXYNOS4_ALIGN(h, format == HAL_PIXEL_FORMAT_YCbCr_420_P ? 32 : 16);
 
         /* take borrowed logic which was deactivated in https://github.com/NamelessRom/android_frameworks_native/commit/4860d41c044e0cff732fbfa13d83af76fc37e1b5 */
         if ((format == HAL_PIXEL_FORMAT_YCbCr_420_P) ||
