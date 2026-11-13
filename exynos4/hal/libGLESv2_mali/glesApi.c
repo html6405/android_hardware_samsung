@@ -15,6 +15,7 @@
  */
 
 #include <string.h>
+#include <stdatomic.h>
 
 #include <GLES2/gl2.h>
 #include <log/log.h>
@@ -44,7 +45,7 @@ static int meets_es2_highp_float_minimum(const GLint *range, GLint precision)
 void glGetShaderPrecisionFormat(GLenum shadertype, GLenum precisiontype,
                                 GLint *range, GLint *precision)
 {
-    static int logged;
+    static atomic_flag logged = ATOMIC_FLAG_INIT;
     GLint originalRange[2] = {0, 0};
     GLint originalPrecision = 0;
 
@@ -70,10 +71,9 @@ void glGetShaderPrecisionFormat(GLenum shadertype, GLenum precisiontype,
     range[1] = 62;
     *precision = 16;
 
-    if (!logged) {
+    if (!atomic_flag_test_and_set_explicit(&logged, memory_order_relaxed)) {
         ALOGW("Mali-400 legacy GLES2 compatibility: fragment highp %d/%d/%d -> 62/62/16; "
               "r3p2 compiler executes fragment highp at mediump precision",
               originalRange[0], originalRange[1], originalPrecision);
-        logged = 1;
     }
 }
