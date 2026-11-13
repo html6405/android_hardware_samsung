@@ -1149,11 +1149,17 @@ Return<void> RadioImpl::setupDataCall(int32_t serial, RadioTechnology radioTechn
 #endif
 
     if (s_vendorFunctions->version >= 4 && s_vendorFunctions->version <= 14) {
-        const hidl_string &protocol =
+        std::string protocol =
                 (isRoaming ? dataProfileInfo.roamingProtocol : dataProfileInfo.protocol);
+        if (protocol == "IPV4V6" && property_get_bool("ro.vendor.ril.ipv4_only", false)) {
+            protocol = "IP";
+        }
+        // Transient APN profiles use INVALID in modern frameworks.
+        const int profileId = static_cast<int>(dataProfileInfo.profileId);
+        const int legacyProfileId = profileId < 0 ? 0 : profileId;
         dispatchStrings(serial, mSlotId, RIL_REQUEST_SETUP_DATA_CALL, true, 7,
             std::to_string((int) radioTechnology + 2).c_str(),
-            std::to_string((int) dataProfileInfo.profileId).c_str(),
+            std::to_string(legacyProfileId).c_str(),
             dataProfileInfo.apn.c_str(),
             dataProfileInfo.user.c_str(),
             dataProfileInfo.password.c_str(),
@@ -4200,6 +4206,8 @@ int radio::setupDataCallResponse(int slotId,
                 if (e == RIL_E_SUCCESS) responseInfo.error = RadioError::INVALID_RESPONSE;
             }
             result.status = DataCallFailCause::ERROR_UNSPECIFIED;
+            // No modem payload supplies no retry suggestion, not a zero delay.
+            result.suggestedRetryTime = -1;
             result.type = hidl_string();
             result.ifname = hidl_string();
             result.addresses = hidl_string();
