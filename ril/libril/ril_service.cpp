@@ -4198,7 +4198,8 @@ int radio::setupDataCallResponse(int slotId,
 
         SetupDataCallResult result = {};
 
-        if (response == NULL || (responseLen % sizeof(RIL_Data_Call_Response_v11) != 0
+        if (response == NULL || responseLen == 0
+                || (responseLen % sizeof(RIL_Data_Call_Response_v11) != 0
                 && responseLen % sizeof(RIL_Data_Call_Response_v9) != 0
                 && responseLen % sizeof(RIL_Data_Call_Response_v6) != 0)) {
             if (response != NULL) {
