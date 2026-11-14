@@ -38,7 +38,8 @@ paths use the helper; only the configured device path was tested in playback.
 The corrected decoder was installed to the N8000 vendor partition after
 a temporary bind-mount test, preserving an original-library backup. On-disk
 SHA-256: `34c889a1cb0a1a9f4dabc1ba5fdd4992ac7c391444c169eef3cc635eb7ff25c0`.
-No reboot verification was performed during this playback session.
+The device owner subsequently confirmed a successful reboot test: the fix
+remains effective after restarting the N8000.
 
 Raw logs, screenshot, original library, and installation verification are
 kept locally under `bringup-notes/exynos4-avc-20261114` in the Android tree.
