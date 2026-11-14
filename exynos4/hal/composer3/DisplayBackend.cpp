@@ -13,6 +13,7 @@
 #include <string.h>
 #include <sync/sync.h>
 #include <sys/ioctl.h>
+#include <unistd.h>
 #include <utility>
 
 #include "backend/BufferManager.h"
@@ -363,26 +364,36 @@ int DisplayBackend::setPower(bool on) {
 int DisplayBackend::setBrightness(float brightness) {
     if (!isfinite(brightness) || brightness < 0.0f || brightness > 1.0f) return -EINVAL;
 
-    int maxFd = open("/sys/class/backlight/panel/max_brightness", O_RDONLY | O_CLOEXEC);
-    if (maxFd < 0) return -errno;
-    char maxText[16]{};
-    const ssize_t count = read(maxFd, maxText, sizeof(maxText) - 1);
-    const int readError = errno;
-    close(maxFd);
-    if (count <= 0) return count < 0 ? -readError : -EIO;
-    unsigned int maximum = 0;
-    if (sscanf(maxText, "%u", &maximum) != 1 || maximum == 0) return -EINVAL;
+    if (mBacklightMax == 0) {
+        int maxFd = open("/sys/class/backlight/panel/max_brightness", O_RDONLY | O_CLOEXEC);
+        if (maxFd < 0) return -errno;
+        char maxText[16]{};
+        const ssize_t count = read(maxFd, maxText, sizeof(maxText) - 1);
+        const int readError = errno;
+        close(maxFd);
+        if (count <= 0) return count < 0 ? -readError : -EIO;
+        unsigned int maximum = 0;
+        if (sscanf(maxText, "%u", &maximum) != 1 || maximum == 0) return -EINVAL;
+        mBacklightMax = maximum;
+    }
+    if (mBacklight.get() < 0) {
+        mBacklight.reset(open("/sys/class/backlight/panel/brightness", O_WRONLY | O_CLOEXEC));
+        if (mBacklight.get() < 0) return -errno;
+    }
 
-    const unsigned int level = lroundf(brightness * maximum);
+    const unsigned int level = lroundf(brightness * mBacklightMax);
     char levelText[16];
     const int length = snprintf(levelText, sizeof(levelText), "%u\n", level);
     if (length <= 0 || length >= static_cast<int>(sizeof(levelText))) return -EINVAL;
-    int fd = open("/sys/class/backlight/panel/brightness", O_WRONLY | O_CLOEXEC);
-    if (fd < 0) return -errno;
-    const ssize_t written = write(fd, levelText, length);
+    // sysfs attributes parse one write per call from offset zero.
+    const ssize_t written = pwrite(mBacklight.get(), levelText, length, 0);
     const int writeError = errno;
-    close(fd);
-    return written == length ? 0 : written < 0 ? -writeError : -EIO;
+    if (written != length) {
+        // Drop the cached descriptor so the next update starts clean.
+        mBacklight.reset();
+        return written < 0 ? -writeError : -EIO;
+    }
+    return 0;
 }
 
 int DisplayBackend::setVsyncEnabled(bool enabled) {

@@ -51,6 +51,10 @@ class DisplayBackend {
   private:
     android::base::unique_fd mFramebuffer;
     android::base::unique_fd mFimc;
+    // Backlight node and its range never change at runtime; open and read
+    // them once instead of on every brightness update.
+    android::base::unique_fd mBacklight;
+    unsigned int mBacklightMax = 0;
     DisplayMode mMode;
 };
 
