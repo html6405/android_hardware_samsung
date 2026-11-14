@@ -66,6 +66,70 @@
 #endif
 //#define FULL_FRAME_SEARCH
 
+/* The tiled source geometry is independent of an adaptive-playback ANB.
+ * NEON uses its width for both tile addressing and linear row pitch, so
+ * convert to a compact scratch image before copying to a larger ANB. */
+static OMX_ERRORTYPE SEC_H264_CopyTiledOutput(
+    SEC_H264DEC_HANDLE *decoder, void **dst,
+    SSBSIP_MFC_DEC_OUTPUT_INFO *src, OMX_U32 dstStride, OMX_BOOL planar,
+    OMX_BOOL nativeBuffer)
+{
+    OMX_U32 width = src->img_width;
+    OMX_U32 height = src->img_height;
+    OMX_U32 chromaStride = planar ? dstStride / 2 : dstStride;
+    OMX_U32 ySize;
+    OMX_U32 size;
+    OMX_U32 row;
+    unsigned char *out[3];
+    OMX_BOOL compact;
+
+    if (planar && nativeBuffer)
+        chromaStride = (chromaStride + 15) & ~15U;
+    compact = dstStride == width && (!planar || chromaStride == width / 2);
+
+    if (!width || !height || width > 4096 || height > 4096 ||
+        ((width | height) & 1) || dstStride < width)
+        return OMX_ErrorBadParameter;
+    ySize = width * height;
+    size = ySize + ySize / 2;
+    if (compact) {
+        out[0] = dst[0]; out[1] = dst[1]; out[2] = dst[2];
+    } else {
+        if (decoder->cscScratchSize < size) {
+            void *scratch = SEC_OSAL_Malloc(size);
+            if (scratch == NULL)
+                return OMX_ErrorInsufficientResources;
+            SEC_OSAL_Free(decoder->cscScratch);
+            decoder->cscScratch = scratch;
+            decoder->cscScratchSize = size;
+        }
+        out[0] = decoder->cscScratch;
+        out[1] = out[0] + ySize;
+        out[2] = out[1] + ySize / 4;
+    }
+    csc_tiled_to_linear_y_neon(out[0], src->YVirAddr, width, height);
+    if (planar)
+        csc_tiled_to_linear_uv_deinterleave_neon(
+            out[1], out[2], src->CVirAddr, width, height / 2);
+    else
+        csc_tiled_to_linear_uv_neon(out[1], src->CVirAddr, width, height / 2);
+
+    if (!compact) {
+        for (row = 0; row < height; ++row)
+            SEC_OSAL_Memcpy((unsigned char *)dst[0] + row * dstStride,
+                            out[0] + row * width, width);
+        for (row = 0; row < height / 2; ++row) {
+            OMX_U32 rowBytes = planar ? width / 2 : width;
+            SEC_OSAL_Memcpy((unsigned char *)dst[1] + row * chromaStride,
+                            out[1] + row * rowBytes, rowBytes);
+            if (planar)
+                SEC_OSAL_Memcpy((unsigned char *)dst[2] + row * chromaStride,
+                                out[2] + row * rowBytes, rowBytes);
+        }
+    }
+    return OMX_ErrorNone;
+}
+
 #ifdef USE_ANB
 static OMX_ERRORTYPE SEC_H264_LockANBForCPU(
     SEC_OMX_DATA *pOutputData,
@@ -129,6 +193,21 @@ static OMX_BOOL SEC_H264_ConvertToANBWithFIMC(
 
     if (SEC_OSAL_GetPhysANB(pOutputData->dataBuffer, dstPhys) != OMX_ErrorNone)
         return OMX_FALSE;
+
+    /* Adaptive playback may allocate an ANB for a larger resolution.
+     * This FIMC API derives destination pitch/planes from the source size;
+     * use the strided CPU converter when that geometry does not fit. */
+    {
+        OMX_BOOL planar = format == OMX_COLOR_FormatYUV420Planar ||
+                          format == OMX_COLOR_FormatYCbCr420Planar;
+        OMX_U32 dstWidth = (width + (planar ? 31 : 15)) & ~(planar ? 31U : 15U);
+        OMX_U32 dstHeight = planar ? (height + 31) & ~31U : height;
+        OMX_U32 ySize = dstWidth * dstHeight;
+        if ((unsigned char *)dstPhys[1] != (unsigned char *)dstPhys[0] + ySize ||
+            (planar && (unsigned char *)dstPhys[2] !=
+                       (unsigned char *)dstPhys[1] + ySize / 4))
+            return OMX_FALSE;
+    }
 
     if (csc_fimc_convert_nv12t(pH264Dec->hFIMCHandle, dstPhys, srcPhys,
                                width, height, format) != CSC_FIMC_RET_OK)
@@ -1540,16 +1619,16 @@ OMX_ERRORTYPE SEC_MFC_H264_Decode_Nonblock(OMX_COMPONENTTYPE *pOMXComponent, SEC
                         goto EXIT;
                 }
 #endif
-                csc_tiled_to_linear_y_neon(
-                    (unsigned char *)pYUVBuf[0],
-                    (unsigned char *)outputInfo.YVirAddr,
-                    actualWidth,
-                    actualHeight);
-                csc_tiled_to_linear_uv_neon(
-                    (unsigned char *)pYUVBuf[1],
-                    (unsigned char *)outputInfo.CVirAddr,
-                    actualWidth,
-                    actualHeight / 2);
+                ret = SEC_H264_CopyTiledOutput(pH264Dec, pYUVBuf, &outputInfo,
+                                                actualWidth, OMX_FALSE, anbLocked);
+                if (ret != OMX_ErrorNone) {
+                    pOutputData->dataLen = 0;
+#ifdef USE_ANB
+                    if (anbLocked == OMX_TRUE)
+                        SEC_OSAL_UnlockANB(pOutputData->dataBuffer);
+#endif
+                    goto EXIT;
+                }
                 break;
             case OMX_COLOR_FormatYUV420Planar:
             case OMX_COLOR_FormatYCbCr420Planar:
@@ -1577,17 +1656,16 @@ OMX_ERRORTYPE SEC_MFC_H264_Decode_Nonblock(OMX_COMPONENTTYPE *pOMXComponent, SEC
                         goto EXIT;
                 }
 #endif
-                csc_tiled_to_linear_y_neon(
-                    (unsigned char *)pYUVBuf[0],
-                    (unsigned char *)outputInfo.YVirAddr,
-                    actualWidth,
-                    actualHeight);
-                csc_tiled_to_linear_uv_deinterleave_neon(
-                    (unsigned char *)pYUVBuf[1],
-                    (unsigned char *)pYUVBuf[2],
-                    (unsigned char *)outputInfo.CVirAddr,
-                    actualWidth,
-                    actualHeight / 2);
+                ret = SEC_H264_CopyTiledOutput(pH264Dec, pYUVBuf, &outputInfo,
+                                                actualWidth, OMX_TRUE, anbLocked);
+                if (ret != OMX_ErrorNone) {
+                    pOutputData->dataLen = 0;
+#ifdef USE_ANB
+                    if (anbLocked == OMX_TRUE)
+                        SEC_OSAL_UnlockANB(pOutputData->dataBuffer);
+#endif
+                    goto EXIT;
+                }
                 break;
             }
         }
@@ -1866,16 +1944,16 @@ OMX_ERRORTYPE SEC_MFC_H264_Decode_Block(OMX_COMPONENTTYPE *pOMXComponent, SEC_OM
                             goto EXIT;
                     }
 #endif
-                    csc_tiled_to_linear_y_neon(
-                        (unsigned char *)pYUVBuf[0],
-                        (unsigned char *)outputInfo.YVirAddr,
-                        actualWidth,
-                        actualHeight);
-                    csc_tiled_to_linear_uv_neon(
-                        (unsigned char *)pYUVBuf[1],
-                        (unsigned char *)outputInfo.CVirAddr,
-                        actualWidth,
-                        actualHeight / 2);
+                    ret = SEC_H264_CopyTiledOutput(pH264Dec, pYUVBuf, &outputInfo,
+                                                    actualWidth, OMX_FALSE, anbLocked);
+                    if (ret != OMX_ErrorNone) {
+                        pOutputData->dataLen = 0;
+#ifdef USE_ANB
+                        if (anbLocked == OMX_TRUE)
+                            SEC_OSAL_UnlockANB(pOutputData->dataBuffer);
+#endif
+                        goto EXIT;
+                    }
                     break;
                 case OMX_COLOR_FormatYUV420Planar:
                 default:
@@ -1896,17 +1974,16 @@ OMX_ERRORTYPE SEC_MFC_H264_Decode_Block(OMX_COMPONENTTYPE *pOMXComponent, SEC_OM
                             goto EXIT;
                     }
 #endif
-                    csc_tiled_to_linear_y_neon(
-                        (unsigned char *)pYUVBuf[0],
-                        (unsigned char *)outputInfo.YVirAddr,
-                        actualWidth,
-                        actualHeight);
-                    csc_tiled_to_linear_uv_deinterleave_neon(
-                        (unsigned char *)pYUVBuf[1],
-                        (unsigned char *)pYUVBuf[2],
-                        (unsigned char *)outputInfo.CVirAddr,
-                        actualWidth,
-                        actualHeight / 2);
+                    ret = SEC_H264_CopyTiledOutput(pH264Dec, pYUVBuf, &outputInfo,
+                                                    actualWidth, OMX_TRUE, anbLocked);
+                    if (ret != OMX_ErrorNone) {
+                        pOutputData->dataLen = 0;
+#ifdef USE_ANB
+                        if (anbLocked == OMX_TRUE)
+                            SEC_OSAL_UnlockANB(pOutputData->dataBuffer);
+#endif
+                        goto EXIT;
+                    }
                     break;
                 }
             }
@@ -2211,6 +2288,7 @@ OMX_ERRORTYPE SEC_OMX_ComponentDeinit(OMX_HANDLETYPE hComponent)
 
     pH264Dec = (SEC_H264DEC_HANDLE *)((SEC_OMX_VIDEODEC_COMPONENT *)pSECComponent->hComponentHandle)->hCodecHandle;
     if (pH264Dec != NULL) {
+        SEC_OSAL_Free(pH264Dec->cscScratch);
         SEC_OSAL_Free(pH264Dec);
         pH264Dec = ((SEC_OMX_VIDEODEC_COMPONENT *)pSECComponent->hComponentHandle)->hCodecHandle = NULL;
     }
