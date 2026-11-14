@@ -59,6 +59,10 @@ typedef struct _SEC_H264DEC_HANDLE
     /* SEC MFC Codec specific */
     SEC_MFC_H264DEC_HANDLE hMFCH264Handle;
 
+    /* Compact CPU CSC image for native buffers with a different stride. */
+    OMX_PTR cscScratch;
+    OMX_U32 cscScratchSize;
+
     /* CSC FIMC handle */
 #ifdef USE_CSC_FIMC
     OMX_PTR hFIMCHandle;
