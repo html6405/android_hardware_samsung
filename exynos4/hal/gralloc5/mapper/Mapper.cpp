@@ -524,14 +524,14 @@ class Mapper final : public vendor::mapper::IMapperV5Impl {
             default:
                 return AIMAPPER_ERROR_UNSUPPORTED;
         }
-        const int client = ion_client_create();
+        IonClientRef ion;
+        const int client = ion.get();
         if (client < 0) return AIMAPPER_ERROR_NO_RESOURCES;
         BufferLayout layout;
         computeLayout(buffer->data[kWidth], buffer->data[kHeight], buffer->data[kFormat], &layout);
         ump_cpu_msync_now(it->second.ump, UMP_MSYNC_CLEAN, metadata, kMetadataPageSize);
         const int rc = ion_msync(client, buffer->data[kFd], IMSYNC_DEV_TO_RW | IMSYNC_SYNC_FOR_DEV,
                                  kMetadataPageSize, metadataOffset(layout));
-        ion_client_destroy(client);
         return rc < 0 ? AIMAPPER_ERROR_NO_RESOURCES : AIMAPPER_ERROR_NONE;
     }
 
@@ -593,11 +593,11 @@ class Mapper final : public vendor::mapper::IMapperV5Impl {
         const size_t offset = metadataOffset(layout);
         if (offset > state.size || state.size - offset < sizeof(SharedMetadata))
             return nullptr;  // Legacy buffer with no metadata page.
-        const int client = ion_client_create();
+        IonClientRef ion;
+        const int client = ion.get();
         if (client < 0) return nullptr;
         const int rc = ion_msync(client, buffer->data[kFd], IMSYNC_DEV_TO_RW | IMSYNC_SYNC_FOR_CPU,
                                  kMetadataPageSize, offset);
-        ion_client_destroy(client);
         if (rc < 0) return nullptr;
         ump_cpu_msync_now(state.ump, UMP_MSYNC_INVALIDATE,
                           static_cast<uint8_t*>(state.address) + offset, kMetadataPageSize);

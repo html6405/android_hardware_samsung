@@ -65,6 +65,19 @@ constexpr uint32_t kMetadataMagic = 0x344d4558;
 constexpr size_t kMetadataPageSize = 4096;
 size_t metadataOffset(const BufferLayout& layout);
 
+class IonClientRef {
+  public:
+    IonClientRef();
+    ~IonClientRef();
+    IonClientRef(const IonClientRef&) = delete;
+    IonClientRef& operator=(const IonClientRef&) = delete;
+    int get() const { return mFd; }
+
+  private:
+    int mFd = -1;
+    bool mOwned = false;
+};
+
 // All arithmetic is checked before narrowing into the legacy 32-bit ABI.
 bool computeLayout(uint32_t width, uint32_t height, int32_t format, BufferLayout* out);
 bool validateHandle(const native_handle_t* handle);

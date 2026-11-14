@@ -7,6 +7,7 @@
 #include <cutils/properties.h>
 #include <log/log.h>
 
+#include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/random.h>
 #include <cstring>
@@ -55,7 +56,27 @@ bool fitsLegacySize(uint64_t bytes) {
     return bytes > 0 && bytes <= static_cast<uint64_t>(INT32_MAX);
 }
 
+int createSharedIonClient() {
+    const int fd = ion_client_create();
+    if (fd >= 0) fcntl(fd, F_SETFD, FD_CLOEXEC);
+    return fd;
+}
+
 }  // namespace
+
+IonClientRef::IonClientRef() {
+    static const int shared = createSharedIonClient();
+    if (shared >= 0) {
+        mFd = shared;
+        return;
+    }
+    mFd = ion_client_create();
+    mOwned = mFd >= 0;
+}
+
+IonClientRef::~IonClientRef() {
+    if (mOwned) ion_client_destroy(mFd);
+}
 
 bool computeLayout(uint32_t width, uint32_t height, int32_t format, BufferLayout* out) {
     if (!out || !width || !height || width > INT32_MAX || height > INT32_MAX) return false;
@@ -195,7 +216,8 @@ native_handle_t* allocateBuffer(uint32_t width, uint32_t height, int32_t format,
                                      format == static_cast<int32_t>(PixelFormat::RGB_565));
     const bool contiguous = (usage & kNeedsPhysical) ||
                             ((usage & overlay) && !optionalGpuOverlay);
-    const int ionClient = ion_client_create();
+    IonClientRef client;
+    const int ionClient = client.get();
     if (ionClient < 0) {
         ALOGE("Cannot open ION client for %ux%u: errno=%d", width, height, errno);
         return nullptr;
@@ -206,7 +228,6 @@ native_handle_t* allocateBuffer(uint32_t width, uint32_t height, int32_t format,
                                contiguous ? ION_HEAP_EXYNOS_CONTIG_MASK : ION_HEAP_EXYNOS_MASK));
     if (!heap) {
         ALOGE("ION heap mask is zero for %ux%u contiguous=%d", width, height, contiguous);
-        ion_client_destroy(ionClient);
         return nullptr;
     }
     const int fd = ion_alloc(ionClient, allocationSize, contiguous ? 0x10000 : 0x1000, heap);
@@ -215,14 +236,12 @@ native_handle_t* allocateBuffer(uint32_t width, uint32_t height, int32_t format,
               "bytes=%zu heap=0x%x contiguous=%d, errno=%d",
               width, height, format, static_cast<unsigned long long>(usage),
               allocationSize, heap, contiguous, errno);
-        ion_client_destroy(ionClient);
         return nullptr;
     }
     const ion_phys_addr_t phys = contiguous ? ion_getphys(ionClient, fd) : 0;
     if (contiguous && (phys == 0 || phys > UINT32_MAX)) {
         ALOGE("Contiguous ION allocation has no 32-bit physical address");
         ion_free(fd);
-        ion_client_destroy(ionClient);
         return nullptr;
     }
     ump_handle ump = ump_ref_drv_ion_import(fd, UMP_REF_DRV_CONSTRAINT_USE_CACHE);
@@ -231,7 +250,6 @@ native_handle_t* allocateBuffer(uint32_t width, uint32_t height, int32_t format,
               width, height, format, static_cast<unsigned long long>(usage), allocationSize,
               heap);
         ion_free(fd);
-        ion_client_destroy(ionClient);
         return nullptr;
     }
     const ump_secure_id secureId = ump_secure_id_get(ump);
@@ -239,7 +257,6 @@ native_handle_t* allocateBuffer(uint32_t width, uint32_t height, int32_t format,
         ALOGE("UMP import returned no secure ID for %ux%u", width, height);
         ump_reference_release(ump);
         ion_free(fd);
-        ion_client_destroy(ionClient);
         return nullptr;
     }
 
@@ -252,7 +269,6 @@ native_handle_t* allocateBuffer(uint32_t width, uint32_t height, int32_t format,
               errno);
         ump_reference_release(ump);
         ion_free(fd);
-        ion_client_destroy(ionClient);
         return nullptr;
     }
     auto* metadata = reinterpret_cast<SharedMetadata*>(mapping);
@@ -279,7 +295,6 @@ native_handle_t* allocateBuffer(uint32_t width, uint32_t height, int32_t format,
               metadataSyncErrno);
         ump_reference_release(ump);
         ion_free(fd);
-        ion_client_destroy(ionClient);
         return nullptr;
     }
 
@@ -288,7 +303,6 @@ native_handle_t* allocateBuffer(uint32_t width, uint32_t height, int32_t format,
         ALOGE("Native handle allocation failed for %ux%u: errno=%d", width, height, errno);
         ump_reference_release(ump);
         ion_free(fd);
-        ion_client_destroy(ionClient);
         return nullptr;
     }
     for (int i = 0; i <= kIonClient; ++i) h->data[i] = 0;
@@ -310,7 +324,6 @@ native_handle_t* allocateBuffer(uint32_t width, uint32_t height, int32_t format,
     h->data[kVoffset] = layout.vOffset;
 
     ump_reference_release(ump);
-    ion_client_destroy(ionClient);
     return h;
 }
 
