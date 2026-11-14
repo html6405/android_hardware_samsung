@@ -327,6 +327,13 @@ void ComposerClient::validate(std::vector<CommandResultPayload>* results) {
     mPendingChanges.clear();
     mValidatedGeneration = mStateGeneration;
     const size_t count = ordered.size();
+    std::vector<char> scanout(count, 0);
+    std::vector<char> video(count, 0);
+    for (size_t i = 0; i < count; ++i) {
+        scanout[i] = canScanout(*ordered[i].second, false);
+        video[i] = isVideoLayer(*ordered[i].second);
+    }
+    const bool scanoutAsBottom = count > 0 && canScanout(*ordered[0].second, true);
     size_t bestBegin = 0, bestEnd = count;
     size_t bestDeviceCount = 0;
     unsigned int bestFimcLayers = 0;
@@ -340,7 +347,7 @@ void ComposerClient::validate(std::vector<CommandResultPayload>* results) {
             const bool needsClient = end != begin;
             const size_t deviceCount = count - (end - begin);
             const bool deviceAtBottom = count > 0 && (begin > 0 || !needsClient);
-            if (deviceAtBottom && !canScanout(*ordered[0].second, true))
+            if (deviceAtBottom && !scanoutAsBottom)
                 continue;
             if (deviceCount + (needsClient ? 1 : 0) > 5)
                 continue;
@@ -348,7 +355,7 @@ void ComposerClient::validate(std::vector<CommandResultPayload>* results) {
             unsigned int fimcLayers = 0;
             for (size_t i = 0; i < count; ++i) {
                 if (i >= begin && i < end) continue;
-                if (!canScanout(*ordered[i].second, i == 0 && deviceAtBottom)) {
+                if (!(i == 0 && deviceAtBottom ? scanoutAsBottom : scanout[i])) {
                     eligible = false;
                     break;
                 }
@@ -358,7 +365,7 @@ void ComposerClient::validate(std::vector<CommandResultPayload>* results) {
                     eligible = false;
                     break;
                 }
-                if (isVideoLayer(*ordered[i].second) && ++fimcLayers > 1) {
+                if (video[i] && ++fimcLayers > 1) {
                     eligible = false;
                     break;
                 }
@@ -413,6 +420,7 @@ void ComposerClient::validate(std::vector<CommandResultPayload>* results) {
 int ComposerClient::present(std::vector<CommandResultPayload>* results) {
     if (!mValidated) return IComposerClient::EX_NOT_VALIDATED;
     std::vector<DisplayBackend::Window> windows;
+    windows.reserve(mDeviceLayers.size() + 1);
     native_handle_t* currentFimcScratch = nullptr;
     for (size_t layerIndex = 0; layerIndex < mDeviceLayers.size(); ++layerIndex) {
         int64_t id = mDeviceLayers[layerIndex];
