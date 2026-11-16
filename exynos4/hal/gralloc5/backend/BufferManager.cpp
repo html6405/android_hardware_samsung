@@ -107,6 +107,8 @@ bool computeLayout(uint32_t width, uint32_t height, int32_t format, BufferLayout
         stride = (static_cast<uint64_t>(width) + 31) & ~uint64_t{31};
         allocationHeight = (static_cast<uint64_t>(height) + 31) & ~uint64_t{31};
     }
+    if (format == static_cast<int32_t>(PixelFormat::YV12))
+        allocationHeight = (static_cast<uint64_t>(height) + 15) & ~uint64_t{15};
     if (stride > INT32_MAX || stride > UINT64_MAX / allocationHeight / result.bytesPerPixel)
         return false;
     const uint64_t lumaBytes = stride * allocationHeight * result.bytesPerPixel;
@@ -125,17 +127,17 @@ bool computeLayout(uint32_t width, uint32_t height, int32_t format, BufferLayout
         uint64_t chromaStride;
         if (!align16(stride / 2, &chromaStride) || lumaBytes > UINT32_MAX) return false;
         uint64_t chromaHeight = height / 2;
-        if (format == kExynosI420 && !align16(chromaHeight, &chromaHeight)) return false;
+        if (!align16(chromaHeight, &chromaHeight)) return false;
         if (chromaStride > UINT64_MAX / chromaHeight) return false;
         const uint64_t chromaBytes = chromaStride * chromaHeight;
         if (chromaBytes > UINT32_MAX || lumaBytes > UINT32_MAX - chromaBytes ||
             totalBytes > UINT64_MAX - 2 * chromaBytes)
             return false;
         result.chromaOffset = static_cast<uint32_t>(lumaBytes);
-        // Samsung's 0x101 private handle stores the V-plane offset relative
-        // to U, whereas YV12 stores its Cb offset from the buffer base.
-        result.vOffset = static_cast<uint32_t>(format == kExynosI420
-                ? chromaBytes : lumaBytes + chromaBytes);
+        // The Mali private-handle ABI stores the second chroma-plane offset
+        // relative to the first for both I420 and YV12. Mapper metadata must
+        // translate it back to an absolute offset for framework clients.
+        result.vOffset = static_cast<uint32_t>(chromaBytes);
         totalBytes += 2 * chromaBytes;
     }
     if (!fitsLegacySize(totalBytes) || stride > INT32_MAX) return false;

@@ -182,7 +182,7 @@ std::vector<gm::PlaneLayout> planeLayouts(const native_handle_t* h) {
             cr.horizontalSubsampling = cr.verticalSubsampling = 2;
             auto cb = cr;
             cb.components = {component(T::CB, 0, 8)};
-            cb.offsetInBytes = h->data[kVoffset];
+            cb.offsetInBytes = static_cast<int64_t>(h->data[kUoffset]) + h->data[kVoffset];
             return {plane, cr, cb};
         }
         default:

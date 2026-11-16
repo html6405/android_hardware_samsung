@@ -174,7 +174,7 @@ int lockYcbcr(const gralloc_module_t* module, buffer_handle_t buffer, int usage,
             return 0;
         case HAL_PIXEL_FORMAT_YV12:
             ycbcr->cr = base + buffer->data[kUoffset];
-            ycbcr->cb = base + buffer->data[kVoffset];
+            ycbcr->cb = base + buffer->data[kUoffset] + buffer->data[kVoffset];
             ycbcr->cstride = (buffer->data[kStride] / 2 + 15) & ~15;
             ycbcr->chroma_step = 1;
             return 0;

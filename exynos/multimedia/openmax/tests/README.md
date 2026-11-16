@@ -44,3 +44,19 @@ remains effective after restarting the N8000.
 Raw logs, screenshot, original library, and installation verification are
 kept locally under `bringup-notes/exynos4-avc-20261114` in the Android tree.
 They are not part of this source repository.
+
+## Legacy YV12 ABI, 2026-11-16
+
+The new Gralloc5 allocator must preserve the private handle layout consumed
+by Mali: planar chroma offsets are relative, and YV12 luma/chroma heights
+are independently padded to16 rows. Mapper plane metadata remains absolute.
+The OMX ANB CPU and physical-address paths must apply the same convention.
+
+Run `python3 exynos4/hal/gralloc5/tests/test_buffer_layout.py` and
+`python3 exynos/multimedia/openmax/tests/test_anb_physical_planes.py` from
+`hardware/samsung`. The former covers36 legacy layouts and visible plane
+bounds; the latter checks physical Cb/Cr ordering for YV12 and I420. Both
+use ASan/UBSan. Device HEVC playback no longer logs the previous YUV import
+error after the three Gralloc libraries were replaced, but software HEVC
+throughput is still inadequate in the tested Prime stream. AVC corruption
+and AV sync are not yet confirmed resolved.

@@ -43,7 +43,7 @@ struct BufferLayout {
     uint32_t bytesPerPixel = 0;
     size_t size = 0;
     uint32_t chromaOffset = 0;
-    uint32_t vOffset = 0;
+    uint32_t vOffset = 0;  // Second chroma plane, relative to chromaOffset.
 };
 
 // Stored in the final page of new ION allocations. No extra FD or handle

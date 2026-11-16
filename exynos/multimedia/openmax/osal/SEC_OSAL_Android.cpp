@@ -247,7 +247,7 @@ OMX_ERRORTYPE SEC_OSAL_GetPhysANBHandle(
     paddr[0] = reinterpret_cast<void *>(
             static_cast<uintptr_t>(hnd->paddr + hnd->offset));
     paddr[1] = reinterpret_cast<void *>(static_cast<uintptr_t>(
-            hnd->paddr + hnd->offset + (yv12 ? hnd->voffset : hnd->uoffset)));
+            hnd->paddr + hnd->offset + hnd->uoffset + (yv12 ? hnd->voffset : 0)));
     paddr[2] = reinterpret_cast<void *>(static_cast<uintptr_t>(
             hnd->paddr + hnd->offset +
             (yv12 ? hnd->uoffset : hnd->uoffset + hnd->voffset)));
@@ -342,7 +342,9 @@ OMX_ERRORTYPE SEC_OSAL_LockANB(
     // decoder to write into the mapped allocation.
     allocatedHeight = hnd->format == HAL_PIXEL_FORMAT_YCbCr_420_P
             ? (static_cast<uint64_t>(hnd->height) + 31) & ~uint64_t{31}
-            : static_cast<uint64_t>(hnd->height);
+            : hnd->format == HAL_PIXEL_FORMAT_YV12
+                    ? (static_cast<uint64_t>(hnd->height) + 15) & ~uint64_t{15}
+                    : static_cast<uint64_t>(hnd->height);
     if (hnd->width <= 0 || hnd->height <= 0 || hnd->stride <= 0 ||
         pANB->stride != static_cast<OMX_U32>(hnd->stride) ||
         width == 0 || height == 0 || width > static_cast<OMX_U32>(hnd->stride) ||
@@ -375,7 +377,8 @@ OMX_ERRORTYPE SEC_OSAL_LockANB(
             goto EXIT;
         }
         if (hnd->format == HAL_PIXEL_FORMAT_YV12) {
-            vaddr[1] = static_cast<unsigned char *>(vaddr[0]) + hnd->voffset; // Cb
+            vaddr[1] = static_cast<unsigned char *>(vaddr[0]) +
+                       hnd->uoffset + hnd->voffset; // Cb
             vaddr[2] = static_cast<unsigned char *>(vaddr[0]) + hnd->uoffset; // Cr
         } else {
             vaddr[1] = static_cast<unsigned char *>(vaddr[0]) + hnd->uoffset; // Cb
