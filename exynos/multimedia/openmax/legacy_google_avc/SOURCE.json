@@ -1,0 +1,19 @@
+{
+  "repository": "frameworks/av",
+  "local_source_root": "/home/html6405/LineageOS-21/frameworks/av",
+  "source_commit": "a3599891f7422821521a877b02e6639085be548d",
+  "source_directory": "media/libstagefright/codecs/avcdec",
+  "source_files": [
+    "SoftAVCDec.cpp",
+    "SoftAVCDec.h",
+    "exports.lds"
+  ],
+  "adaptations": [
+    "MediaDefs.h include moved to stagefright/foundation",
+    "Explicit vendor-only Android 16 module with current OMX base and libavcdec"
+  ],
+  "product_included": true,
+  "product_scope": [
+    "n80xx-common"
+  ]
+}

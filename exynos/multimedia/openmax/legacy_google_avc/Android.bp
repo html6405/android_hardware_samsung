@@ -1,0 +1,33 @@
+// Keep the Android 14 OMX software AVC path as a fallback alongside MFC.
+package {
+    default_applicable_licenses: ["hardware_samsung_legacy_google_avc_license"],
+}
+
+license {
+    name: "hardware_samsung_legacy_google_avc_license",
+    visibility: [":__subpackages__"],
+    license_kinds: ["SPDX-license-identifier-Apache-2.0"],
+    license_text: ["NOTICE"],
+}
+cc_library_shared {
+    name: "libstagefright_soft_avcdec",
+    vendor: true,
+    compile_multilib: "32",
+    srcs: ["SoftAVCDec.cpp"],
+    static_libs: ["libavcdec"],
+    header_libs: ["media_plugin_headers"],
+    shared_libs: [
+        "libstagefright_softomx",
+        "libstagefright_foundation",
+        "libutils",
+        "liblog",
+    ],
+    cflags: ["-Wall", "-Werror"],
+    version_script: "exports.lds",
+    sanitize: {
+        misc_undefined: ["signed-integer-overflow", "unsigned-integer-overflow"],
+        cfi: true,
+        config: {cfi_assembly_support: true},
+    },
+    ldflags: ["-Wl,-Bsymbolic"],
+}
