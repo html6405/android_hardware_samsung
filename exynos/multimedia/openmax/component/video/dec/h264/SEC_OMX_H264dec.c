@@ -1193,6 +1193,13 @@ OMX_ERRORTYPE SEC_MFC_H264_Decode_Nonblock(OMX_COMPONENTTYPE *pOMXComponent, SEC
 
             pH264Dec->hMFCH264Handle.bConfiguredMFC = OMX_TRUE;
 
+            /* The crop update below also changes the port dimensions. Keep
+             * the original mismatch so a cropped stream still reallocates
+             * native buffers when its coded size differs from the request. */
+            OMX_BOOL frameSizeChanged =
+                pSECInputPort->portDefinition.format.video.nFrameWidth != (unsigned int)imgResol.width ||
+                pSECInputPort->portDefinition.format.video.nFrameHeight != (unsigned int)imgResol.height;
+
             /** Update Frame Size **/
             if ((cropInfo.crop_left_offset != 0) || (cropInfo.crop_right_offset != 0) ||
                 (cropInfo.crop_top_offset != 0) || (cropInfo.crop_bottom_offset != 0)) {
@@ -1213,8 +1220,7 @@ OMX_ERRORTYPE SEC_MFC_H264_Decode_Nonblock(OMX_COMPONENTTYPE *pOMXComponent, SEC
                        OMX_IndexConfigCommonOutputCrop,
                        NULL);
             }
-            if ((pSECInputPort->portDefinition.format.video.nFrameWidth != (unsigned int)imgResol.width) ||
-                (pSECInputPort->portDefinition.format.video.nFrameHeight != (unsigned int)imgResol.height)) {
+            if (frameSizeChanged) {
                 SEC_OSAL_Log(SEC_LOG_TRACE, "change width height information : OMX_EventPortSettingsChanged");
 
                 /* change width and height information */
@@ -1748,6 +1754,13 @@ OMX_ERRORTYPE SEC_MFC_H264_Decode_Block(OMX_COMPONENTTYPE *pOMXComponent, SEC_OM
 
             pH264Dec->hMFCH264Handle.bConfiguredMFC = OMX_TRUE;
 
+            /* The crop update below also changes the port dimensions. Keep
+             * the original mismatch so a cropped stream still reallocates
+             * native buffers when its coded size differs from the request. */
+            OMX_BOOL frameSizeChanged =
+                pSECInputPort->portDefinition.format.video.nFrameWidth != (unsigned int)imgResol.width ||
+                pSECInputPort->portDefinition.format.video.nFrameHeight != (unsigned int)imgResol.height;
+
             /** Update Frame Size **/
             if ((cropInfo.crop_left_offset != 0) || (cropInfo.crop_right_offset != 0) ||
                 (cropInfo.crop_top_offset != 0) || (cropInfo.crop_bottom_offset != 0)) {
@@ -1768,8 +1781,7 @@ OMX_ERRORTYPE SEC_MFC_H264_Decode_Block(OMX_COMPONENTTYPE *pOMXComponent, SEC_OM
                        OMX_IndexConfigCommonOutputCrop,
                        NULL);
             }
-            if ((pSECInputPort->portDefinition.format.video.nFrameWidth != (unsigned int)imgResol.width) ||
-                (pSECInputPort->portDefinition.format.video.nFrameHeight != (unsigned int)imgResol.height)) {
+            if (frameSizeChanged) {
                 SEC_OSAL_Log(SEC_LOG_TRACE, "change width height information : OMX_EventPortSettingsChanged");
                 /* change width and height information */
                 pSECInputPort->portDefinition.format.video.nFrameWidth = imgResol.width;
@@ -2055,6 +2067,50 @@ EXIT:
 }
 
 /* MFC Decode */
+/* The common input flush fills timestamp slots with byte 0x85. Old MFC
+ * DPB frames must not refer to those slots after a seek. */
+#define H264_FLUSHED_TIMESTAMP ((OMX_TICKS)0x8585858585858585ULL)
+
+static OMX_BOOL SEC_H264_TimestampsWereFlushed(SEC_OMX_BASECOMPONENT *base)
+{
+    unsigned int i;
+    for (i = 0; i < sizeof(base->timeStamp) / sizeof(base->timeStamp[0]); ++i)
+        if (base->timeStamp[i] != H264_FLUSHED_TIMESTAMP)
+            return OMX_FALSE;
+    return OMX_TRUE;
+}
+
+static OMX_ERRORTYPE SEC_H264_ResetMfcAfterInputFlush(OMX_COMPONENTTYPE *component)
+{
+    SEC_OMX_BASECOMPONENT *base = component->pComponentPrivate;
+    SEC_OMX_VIDEODEC_COMPONENT *video = base->hComponentHandle;
+    SEC_H264DEC_HANDLE *decoder = video->hCodecHandle;
+    OMX_S32 flush = 1;
+    unsigned int i;
+    if (!decoder->hMFCH264Handle.bConfiguredMFC || video->bFirstFrame ||
+        !base->checkTimeStamp.needCheckStartTimeStamp ||
+        !SEC_H264_TimestampsWereFlushed(base))
+        return OMX_ErrorNone;
+#ifdef NONBLOCK_MODE_PROCESS
+    if (video->NBDecThread.bDecoderRun) {
+        SEC_OSAL_SemaphoreWait(video->NBDecThread.hDecFrameEnd);
+        video->NBDecThread.bDecoderRun = OMX_FALSE;
+    }
+#endif
+    if (SsbSipMfcDecSetConfig(decoder->hMFCH264Handle.hMFCHandle,
+                            MFC_DEC_SETCONF_DPB_FLUSH, &flush) != MFC_RET_OK) {
+        SEC_OSAL_Log(SEC_LOG_ERROR, "MFC input-flush DPB reset failed");
+        return OMX_ErrorHardware;
+    }
+    decoder->hMFCH264Handle.indexTimestamp = 0;
+    decoder->hMFCH264Handle.outputIndexTimestamp = 0;
+    decoder->hMFCH264Handle.returnCodec = MFC_RET_OK;
+    video->bFirstFrame = OMX_TRUE;
+    for (i = 0; i < MFC_INPUT_BUFFER_NUM_MAX; ++i)
+        video->MFCDecInputBuffer[i].dataSize = 0;
+    return OMX_ErrorNone;
+}
+
 OMX_ERRORTYPE SEC_MFC_H264Dec_bufferProcess(OMX_COMPONENTTYPE *pOMXComponent, SEC_OMX_DATA *pInputData, SEC_OMX_DATA *pOutputData)
 {
     OMX_ERRORTYPE ret = OMX_ErrorNone;
@@ -2076,11 +2132,17 @@ OMX_ERRORTYPE SEC_MFC_H264Dec_bufferProcess(OMX_COMPONENTTYPE *pOMXComponent, SE
         goto EXIT;
     }
 
+    ret = SEC_H264_ResetMfcAfterInputFlush(pOMXComponent);
+    if (ret != OMX_ErrorNone)
+        goto EXIT;
 #ifdef NONBLOCK_MODE_PROCESS
     ret = SEC_MFC_H264_Decode_Nonblock(pOMXComponent, pInputData, pOutputData);
 #else
     ret = SEC_MFC_H264_Decode_Block(pOMXComponent, pInputData, pOutputData);
 #endif
+    if (pOutputData->dataLen && pOutputData->timeStamp == H264_FLUSHED_TIMESTAMP)
+        pOutputData->dataLen = 0;
+
     if (ret != OMX_ErrorNone) {
         if (ret == OMX_ErrorInputDataDecodeYet) {
             pOutputData->usedDataLen = 0;
